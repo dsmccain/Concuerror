@@ -24,7 +24,7 @@
 
 -export_type([analysis_target/0, analysis_ret/0, bound/0, transition/0]).
 
-%%-define(DEBUG, true).
+-define(DEBUG, true).
 -include("gen.hrl").
 
 %%%----------------------------------------------------------------------
@@ -219,6 +219,9 @@ empty_clock_map() -> dict:new().
           dpor_flavor  = 'none'   :: 'full' | 'flanagan' | 'none',
           preemption_bound = inf  :: non_neg_integer() | 'inf',
           group_leader            :: pid()
+          % TODO: Adapt the cycle detection to be able to remove this from the
+          % state:
+          , taken_actions = []    :: list()
          }).
 
 interleave_dpor(Target, PreBound, Dpor, Options) ->
@@ -278,19 +281,110 @@ explore(MightNeedReplayState) ->
                         UpdState = update_trace(Selected, Next, State),
                         AllAddState = add_all_backtracks(UpdState),
                         NewState = add_some_next_to_backtrack(AllAddState),
-                        explore(NewState)
+                        %% TODO: Simplify cycle detection
+                        [ActionState|_] = NewState#dpor_state.trace,
+                        {_Lid, Action, _} = ActionState#trace_state.last,
+                        PrevActions = NewState#dpor_state.taken_actions,
+                        ActionList = [{Lid, action_info(Action)}|PrevActions],
+                        NewActionState = NewState#dpor_state{taken_actions =
+                            ActionList},
+                        %% TODO: Get rid of hard-coded value 5 and let the user
+                        %% choose this number
+                        ExploreState = case findCycle(ActionList, 5) of
+                            false -> NewActionState;
+                            CycleInfo ->
+                                {_, Cycle} = CycleInfo,
+                                ?debug("Possible cycle detected"
+                                    ++ " (5 consecutive sequences):\n    ~p\n",
+                                    [begin
+                                        CorrectedCycle = lists:reverse(Cycle),
+                                        lists:zip(lists:seq(1,length(Cycle)),
+                                            CorrectedCycle)
+                                    end]),
+                                #dpor_state{trace = [TraceTop|RestTrace] = Trace,
+                                    tickets = Tickets} = NewActionState,
+                                Blocked = TraceTop#trace_state.blocked,
+                                % TODO: Add cycle to concuerror_sched.erl?
+                                %       Error = {cycle, Blocked},
+                                %%%%%
+                                Error = {exception, Blocked},
+                                LidTrace = convert_trace_to_error_trace(Trace, []),
+                                Ticket = create_ticket(Error, LidTrace),
+                                %% Report error
+                                concuerror_log:progress({'error', Ticket}),
+                                %/%%%
+                                NewTickets = [Ticket|Tickets],
+                                NewActionState#dpor_state{
+                                    must_replay = true
+                                    , trace = RestTrace
+                                    , tickets = NewTickets
+                                    , taken_actions = PrevActions
+                                }
+                        end,
+                        % % Info about all previous taken actions
+                        % ?debug("=> Taken actions up to this moment: ~p\n",
+                        %     [begin
+                        %         TActs =
+                        %         MightNeedReplayState#dpor_state.taken_actions,
+                        %         NTActs = erlang:length(TActs),
+                        %         Ns = lists:reverse(lists:seq(1,NTActs)),
+                        %         lists:zip(Ns, TActs)
+                        %     end]),
+                        explore(ExploreState)
                 end;
             none ->
                 NewState = report_possible_deadlock(MightNeedReplayState),
-                case finished(NewState) of
-                    false -> explore(NewState);
-                    true -> dpor_return(NewState)
+                Actions = NewState#dpor_state.taken_actions,
+                PreActions = case Actions of
+                    [_|Prev] -> Prev;
+                    [] -> []
+                end,
+                ExploreState = NewState#dpor_state{taken_actions = PreActions},
+                case finished(ExploreState) of
+                    false -> explore(ExploreState);
+                    true -> dpor_return(ExploreState)
                 end
         end
     end.
 
+% Change impure information to a format where a cycle might be detected.
+action_info(Msg) ->
+    if
+        erlang:is_pid(Msg) -> pid;
+        erlang:is_tuple(Msg) ->
+            MsgAsList = erlang:tuple_to_list(Msg),
+            erlang:list_to_tuple(action_info(MsgAsList));
+        erlang:is_list(Msg) ->
+            lists:map(fun(E) -> action_info(E) end, Msg);
+        true -> {info, Msg}
+    end.
+
+findCycle(Actions, RepetitionLimit) when RepetitionLimit > 1 ->
+    ActionLen = erlang:length(Actions),
+    findCycle(Actions, ActionLen, RepetitionLimit, 2);
+findCycle(_, _) -> false.
+
+findCycle(Actions, ActionLength, RepeatLimit, SeqN) ->
+    ActionsToCheck = SeqN * RepeatLimit,
+    case ActionsToCheck > ActionLength of
+        true ->
+            case ActionLength < 2 * RepeatLimit of
+                true -> false;
+                false ->
+                    [_|NewActions] = Actions,
+                    findCycle(NewActions, ActionLength - 1, RepeatLimit, 2)
+            end;
+        false ->
+            SeqToCheck = lists:sublist(Actions, SeqN),
+            RepeatedSeq = lists:concat(lists:duplicate(RepeatLimit, SeqToCheck)),
+            case lists:prefix(RepeatedSeq, Actions) of
+                true -> {true, SeqToCheck}; % Shows the repeating sequence
+                false -> findCycle(Actions, ActionLength, RepeatLimit, SeqN+1)
+            end
+    end.
+
 select_from_backtrack(#dpor_state{must_replay = MustReplay,
-				  trace = Trace} = MightNeedReplayState) ->
+                  trace = Trace} = MightNeedReplayState) ->
     %% FIXME: Pick first and don't really subtract.
     %% FIXME: This is actually the trace bottom...
     [TraceTop|_] = Trace,
@@ -311,8 +405,7 @@ select_from_backtrack(#dpor_state{must_replay = MustReplay,
             [NewTraceTop|RestTrace] = State#dpor_state.trace,
             Instruction = dict:fetch(SelectedLid, NewTraceTop#trace_state.nexts),
             NewDone = ordsets:add_element(SelectedLid, Done),
-            FinalTraceTop =
-                NewTraceTop#trace_state{done = NewDone},
+            FinalTraceTop = NewTraceTop#trace_state{done = NewDone},
             FinalState = State#dpor_state{trace = [FinalTraceTop|RestTrace]},
             {ok, Instruction, FinalState}
     end.
@@ -322,8 +415,8 @@ replay_trace(#dpor_state{proc_before = ProcBefore,
                          sleep_blocked_count = SBlocked,
                          group_leader = GroupLeader,
                          target = Target,
-			 trace = Trace,
-			 show_output = ShowOutput} = State) ->
+             trace = Trace,
+             show_output = ShowOutput} = State) ->
     NewRunCnt = RunCnt + 1,
     ?debug("\nReplay (~p) is required...\n", [NewRunCnt]),
     concuerror_lid:stop(),
@@ -436,7 +529,7 @@ get_next(Lid) ->
     end.
 
 add_all_backtracks(#dpor_state{preemption_bound = Bound, trace = Trace,
-			       dpor_flavor = Flavor} = State) ->
+                   dpor_flavor = Flavor} = State) ->
     case Flavor of
         none ->
             %% add_some_next will take care of all the backtracks.
@@ -1317,9 +1410,9 @@ wait_black_messages() ->
                     P <- processes(),
                     process_info(P, status) =/= {status, waiting}],
                 case Running of
-		    [_] -> true;
-		    _ -> false
-		end
+            [_] -> true;
+            _ -> false
+        end
         end,
     concuerror_util:wait_until(Check, 2),
     process_flag(priority, Priority),
