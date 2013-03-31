@@ -219,9 +219,6 @@ empty_clock_map() -> dict:new().
           dpor_flavor  = 'none'   :: 'full' | 'flanagan' | 'none',
           preemption_bound = inf  :: non_neg_integer() | 'inf',
           group_leader            :: pid()
-          % TODO: Adapt the cycle detection to be able to remove this from the
-          % state:
-          , taken_actions = []    :: list()
          }).
 
 interleave_dpor(Target, PreBound, Dpor, Options) ->
@@ -281,17 +278,10 @@ explore(MightNeedReplayState) ->
                         UpdState = update_trace(Selected, Next, State),
                         AllAddState = add_all_backtracks(UpdState),
                         NewState = add_some_next_to_backtrack(AllAddState),
-                        %% TODO: Simplify cycle detection
-                        [ActionState|_] = NewState#dpor_state.trace,
-                        {_Lid, Action, _} = ActionState#trace_state.last,
-                        PrevActions = NewState#dpor_state.taken_actions,
-                        ActionList = [{Lid, action_info(Action)}|PrevActions],
-                        NewActionState = NewState#dpor_state{taken_actions =
-                            ActionList},
                         %% TODO: Get rid of hard-coded value 5 and let the user
                         %% choose this number
-                        ExploreState = case findCycle(ActionList, 5) of
-                            false -> NewActionState;
+                        ExploreState = case findCycle(NewState, 5) of
+                            false -> NewState;
                             CycleInfo ->
                                 {_, Cycle} = CycleInfo,
                                 ?debug("Possible cycle detected"
@@ -302,7 +292,7 @@ explore(MightNeedReplayState) ->
                                             CorrectedCycle)
                                     end]),
                                 #dpor_state{trace = [TraceTop|RestTrace] = Trace,
-                                    tickets = Tickets} = NewActionState,
+                                    tickets = Tickets} = NewState,
                                 Blocked = TraceTop#trace_state.blocked,
                                 % TODO: Add cycle to concuerror_sched.erl?
                                 %       Error = {cycle, Blocked},
@@ -314,35 +304,19 @@ explore(MightNeedReplayState) ->
                                 concuerror_log:progress({'error', Ticket}),
                                 %/%%%
                                 NewTickets = [Ticket|Tickets],
-                                NewActionState#dpor_state{
+                                NewState#dpor_state{
                                     must_replay = true
                                     , trace = RestTrace
                                     , tickets = NewTickets
-                                    , taken_actions = PrevActions
                                 }
                         end,
-                        % % Info about all previous taken actions
-                        % ?debug("=> Taken actions up to this moment: ~p\n",
-                        %     [begin
-                        %         TActs =
-                        %         MightNeedReplayState#dpor_state.taken_actions,
-                        %         NTActs = erlang:length(TActs),
-                        %         Ns = lists:reverse(lists:seq(1,NTActs)),
-                        %         lists:zip(Ns, TActs)
-                        %     end]),
                         explore(ExploreState)
                 end;
             none ->
                 NewState = report_possible_deadlock(MightNeedReplayState),
-                Actions = NewState#dpor_state.taken_actions,
-                PreActions = case Actions of
-                    [_|Prev] -> Prev;
-                    [] -> []
-                end,
-                ExploreState = NewState#dpor_state{taken_actions = PreActions},
-                case finished(ExploreState) of
-                    false -> explore(ExploreState);
-                    true -> dpor_return(ExploreState)
+                case finished(NewState) of
+                    false -> explore(NewState);
+                    true -> dpor_return(NewState)
                 end
         end
     end.
@@ -359,9 +333,22 @@ action_info(Msg) ->
         true -> {info, Msg}
     end.
 
-findCycle(Actions, RepetitionLimit) when RepetitionLimit > 1 ->
-    ActionLen = erlang:length(Actions),
-    findCycle(Actions, ActionLen, RepetitionLimit, 2);
+findCycle(State, RepetitionLimit) when RepetitionLimit > 1 ->
+    Trace = State#dpor_state.trace,
+    ActionList = lists:map(fun(T) ->
+                {TLid, Action, _} = T#trace_state.last,
+                {TLid, action_info(Action)}
+        end, Trace),
+    [TraceTop|_] = Trace,
+    % The amount of actions that have occurred up to this moment:
+    ActionLen = TraceTop#trace_state.i + 1,
+    %% % Info about all previous taken actions
+    %% ?debug("=> Taken actions up to this moment: ~p\n",
+    %%     [begin
+    %%         Ns = lists:reverse(lists:seq(1, ActionLen)),
+    %%         lists:zip(Ns, ActionList)
+    %%     end]),
+    findCycle(ActionList, ActionLen, RepetitionLimit, 2);
 findCycle(_, _) -> false.
 
 findCycle(Actions, ActionLength, RepeatLimit, SeqN) ->
