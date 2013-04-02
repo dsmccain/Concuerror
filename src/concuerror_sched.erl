@@ -22,7 +22,8 @@
 
 -export([notify/3, wait_poll_or_continue/0]).
 
--export_type([analysis_target/0, analysis_ret/0, bound/0, transition/0]).
+-export_type([analysis_target/0, analysis_ret/0, bound/0, cycle_repetitions/0,
+        transition/0]).
 
 -define(DEBUG, true).
 -include("gen.hrl").
@@ -79,6 +80,8 @@
 
 -type bound() :: 'inf' | non_neg_integer().
 
+-type cycle_repetitions() :: 'inf' | pos_integer().
+
 %% Scheduler notification.
 
 -type notification() :: 'after' | 'block' | 'demonitor' | 'ets_delete' |
@@ -113,6 +116,12 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
             {dpor, Flavor} -> Flavor;
             false -> 'none'
         end,
+    CycleReps =
+        case lists:keyfind(cycle, 1, Options) of
+            {cycle, inf} -> ?INFINITY;
+            {cycle, Repetitions} -> Repetitions;
+            false -> ?DEFAULT_CYCLE_REPS
+        end,
     Ret =
         case concuerror_instr:instrument_and_compile(Files, Options) of
             {ok, Bin} ->
@@ -126,7 +135,8 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
                 %% Reset the internal state for the progress logger
                 concuerror_log:reset(),
                 {T1, _} = statistics(wall_clock),
-                Result = interleave(NewTarget, PreBound, Dpor, Options),
+                Result = interleave(NewTarget, PreBound, Dpor, CycleReps,
+                    Options),
                 {T2, _} = statistics(wall_clock),
                 {Mins, Secs} = concuerror_util:to_elapsed_time(T1, T2),
                 ?debug("Done in ~wm~.2fs\n", [Mins, Secs]),
@@ -160,9 +170,10 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
     Ret.
 
 %% Produce all possible process interleavings of (Mod, Fun, Args).
-interleave(Target, PreBound, Dpor, Options) ->
+interleave(Target, PreBound, Dpor, CycleReps, Options) ->
     Self = self(),
-    Fun = fun() -> interleave_aux(Target, PreBound, Self, Dpor, Options) end,
+    Fun = fun() -> interleave_aux(Target, PreBound, Self, Dpor, CycleReps,
+                Options) end,
     process_flag(trap_exit, true),
     Backend = spawn_link(Fun),
     receive
@@ -172,10 +183,10 @@ interleave(Target, PreBound, Dpor, Options) ->
             concuerror_log:internal(Msg)
     end.
 
-interleave_aux(Target, PreBound, Parent, Dpor, Options) ->
+interleave_aux(Target, PreBound, Parent, Dpor, CycleReps, Options) ->
     ?debug("Dpor is not really ready yet...\n"),
     register(?RP_SCHED, self()),
-    Result = interleave_dpor(Target, PreBound, Dpor, Options),
+    Result = interleave_dpor(Target, PreBound, Dpor, CycleReps, Options),
     unregister(?RP_SCHED),
     Parent ! {interleave_result, Result}.
 
@@ -218,10 +229,11 @@ empty_clock_map() -> dict:new().
           proc_before  = []       :: [pid()],
           dpor_flavor  = 'none'   :: 'full' | 'flanagan' | 'none',
           preemption_bound = inf  :: non_neg_integer() | 'inf',
+          cycle_rep_limit  = inf  :: pos_integer() | 'inf',
           group_leader            :: pid()
          }).
 
-interleave_dpor(Target, PreBound, Dpor, Options) ->
+interleave_dpor(Target, PreBound, Dpor, CycleReps, Options) ->
     ?debug("Interleave dpor!\n"),
     Procs = processes(),
     %% To be able to clean up we need to be trapping exits...
@@ -232,7 +244,8 @@ interleave_dpor(Target, PreBound, Dpor, Options) ->
     ?debug("Target started!\n"),
     NewState = #dpor_state{trace = Trace, target = Target, proc_before = Procs,
         dpor_flavor = Dpor, preemption_bound = PreBound,
-        show_output = ShowOutput, group_leader = GroupLeader},
+        cycle_rep_limit = CycleReps, show_output = ShowOutput,
+        group_leader = GroupLeader},
     explore(NewState).
 
 start_target(Target) ->
@@ -278,19 +291,19 @@ explore(MightNeedReplayState) ->
                         UpdState = update_trace(Selected, Next, State),
                         AllAddState = add_all_backtracks(UpdState),
                         NewState = add_some_next_to_backtrack(AllAddState),
-                        %% TODO: Get rid of hard-coded value 5 and let the user
-                        %% choose this number
-                        ExploreState = case findCycle(NewState, 5) of
+                        ExploreState = case findCycle(NewState) of
                             false -> NewState;
+                            % TODO: Go back to beginning of the cycle?
                             CycleInfo ->
                                 {_, Cycle} = CycleInfo,
                                 ?debug("Possible cycle detected"
-                                    ++ " (5 consecutive sequences):\n    ~p\n",
-                                    [begin
+                                    ++ " (~p consecutive sequences):\n    ~p\n",
+                                    [NewState#dpor_state.cycle_rep_limit,
+                                      begin
                                         CorrectedCycle = lists:reverse(Cycle),
                                         lists:zip(lists:seq(1,length(Cycle)),
                                             CorrectedCycle)
-                                    end]),
+                                      end]),
                                 #dpor_state{trace = [TraceTop|RestTrace] = Trace,
                                     tickets = Tickets} = NewState,
                                 Blocked = TraceTop#trace_state.blocked,
@@ -333,7 +346,8 @@ action_info(Msg) ->
         true -> {info, Msg}
     end.
 
-findCycle(State, RepetitionLimit) when RepetitionLimit > 1 ->
+findCycle(#dpor_state{cycle_rep_limit = RepetitionLimit} = State)
+  when RepetitionLimit =/= ?INFINITY ->
     Trace = State#dpor_state.trace,
     ActionList = lists:map(fun(T) ->
                 {TLid, Action, _} = T#trace_state.last,
@@ -349,24 +363,26 @@ findCycle(State, RepetitionLimit) when RepetitionLimit > 1 ->
     %%         lists:zip(Ns, ActionList)
     %%     end]),
     findCycle(ActionList, ActionLen, RepetitionLimit, 2);
-findCycle(_, _) -> false.
+findCycle(_) -> false.
 
-findCycle(Actions, ActionLength, RepeatLimit, SeqN) ->
-    ActionsToCheck = SeqN * RepeatLimit,
+findCycle(ActionList, ActionLength, RepeatLimit, SeqN) ->
+    ActionsToCheck = RepeatLimit * SeqN,
     case ActionsToCheck > ActionLength of
         true ->
+            % TODO: This is useful if the cycle detection isn't executed for
+            % every action made. Let user specify how often to check?
             case ActionLength < 2 * RepeatLimit of
                 true -> false;
                 false ->
-                    [_|NewActions] = Actions,
+                    [_|NewActions] = ActionList,
                     findCycle(NewActions, ActionLength - 1, RepeatLimit, 2)
             end;
         false ->
-            SeqToCheck = lists:sublist(Actions, SeqN),
+            SeqToCheck = lists:sublist(ActionList, SeqN),
             RepeatedSeq = lists:concat(lists:duplicate(RepeatLimit, SeqToCheck)),
-            case lists:prefix(RepeatedSeq, Actions) of
+            case lists:prefix(RepeatedSeq, ActionList) of
                 true -> {true, SeqToCheck}; % Shows the repeating sequence
-                false -> findCycle(Actions, ActionLength, RepeatLimit, SeqN+1)
+                false -> findCycle(ActionList, ActionLength, RepeatLimit, SeqN+1)
             end
     end.
 

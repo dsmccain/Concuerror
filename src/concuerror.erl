@@ -60,6 +60,7 @@
     | {'wait_messages'}
     | {'ignore_timeout', pos_integer()}
     | {'ignore',  [module()]}
+    | {'cycle',   concuerror_sched:cycle_repetitions()}
     | {'help'}.
 
 -type options() :: [option()].
@@ -375,6 +376,23 @@ parse([{Opt, Param} | Args], Options) ->
                 _Other -> wrongArgument('number', Opt)
             end;
 
+        "-cycle-detect" ->
+            case Param of
+                [SeqReps] ->
+                    case string:to_integer(SeqReps) of
+                        {I, []} when I >= 2 ->
+                            NewOptions = lists:keystore(cycle, 1, Options,
+                                {cycle, I}),
+                            parse(Args, NewOptions);
+                        _ when SeqReps =:= "inf" ->
+                            NewOptions = lists:keystore(cycle, 1, Options,
+                                {cycle, inf}),
+                            parse(Args, NewOptions);
+                        _Other -> wrongArgument('type', Opt)
+                    end;
+                _Other -> wrongArgument('number', Opt)
+            end;
+
         "-help" ->
             help(),
             erlang:halt();
@@ -463,6 +481,10 @@ help() ->
      "  --wait-messages         Wait for uninstrumented messages to arrive\n"
      "  -T|--ignore-timeout bound\n"
      "                          Treat big after Timeouts as infinity timeouts\n"
+     "  --cycle-detect  number|inf\n"
+     "                          Specify the number of times a sequence of\n"
+     "                          actions must be repeated to be considered a\n"
+     "                          cycle (default is inf)\n"
      "  --gui                   Run concuerror with graphics\n"
      "  --dpor                  Runs the experimental optimal DPOR version\n"
      "  --dpor_flanagan         Runs an experimental reference DPOR version\n"
