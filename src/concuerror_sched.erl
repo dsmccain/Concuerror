@@ -295,7 +295,8 @@ explore(MightNeedReplayState) ->
                         NewState = add_some_next_to_backtrack(AllAddState),
                         ExploreN = last_trace_n(NewState),
                         % TODO: Prettify the selected action
-                        [_, Action, _] = erlang:tuple_to_list(Selected),
+                        [TraceTop|_] = NewState#dpor_state.trace,
+                        {_, Action, _} = TraceTop#trace_state.last,
                         ActionStr = erlang:tuple_to_list(Action),
                         concuerror_graph:action(ExploreN, ActionStr),
                         ExploreState = case findCycle(NewState) of
