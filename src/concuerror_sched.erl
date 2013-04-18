@@ -284,6 +284,8 @@ explore(MightNeedReplayState) ->
                 case Cmd of
                     {error, _ErrorInfo} ->
                         NewState = report_error(Selected, State),
+                        ExploreN = last_trace_n(NewState) + 1,
+                        concuerror_graph:error(ExploreN),
                         explore(NewState);
                     _Else ->
                         ?debug("Plan: ~p\n",[Selected]),
@@ -291,10 +293,15 @@ explore(MightNeedReplayState) ->
                         UpdState = update_trace(Selected, Next, State),
                         AllAddState = add_all_backtracks(UpdState),
                         NewState = add_some_next_to_backtrack(AllAddState),
+                        ExploreN = last_trace_n(NewState),
+                        % TODO: Prettify the selected action
+                        [_, Action, _] = erlang:tuple_to_list(Selected),
+                        ActionStr = erlang:tuple_to_list(Action),
+                        concuerror_graph:action(ExploreN, ActionStr),
                         ExploreState = case findCycle(NewState) of
                             false -> NewState;
-                            % TODO: Go back to beginning of the cycle?
                             CycleInfo ->
+                                concuerror_graph:cycle(ExploreN),
                                 {_, Cycle} = CycleInfo,
                                 ?debug("Possible cycle detected"
                                     ++ " (~p consecutive sequences):\n    ~p\n",
@@ -1215,11 +1222,14 @@ report_possible_deadlock(State) ->
     {NewTickets, NewSBlocked} =
         case TraceTop#trace_state.enabled of
             [] ->
+                ExploreN = last_trace_n(State) + 1,
                 case TraceTop#trace_state.blocked of
                     [] ->
+                        concuerror_graph:backtrack(ExploreN, normal),
                         ?debug("NORMAL!\n"),
                         {Tickets, SBlocked};
                     Blocked ->
+                        concuerror_graph:backtrack(ExploreN, deadlock),
                         ?debug("DEADLOCK!\n"),
                         Error = {deadlock, Blocked},
                         LidTrace = convert_trace_to_error_trace(Trace, []),
@@ -1229,11 +1239,14 @@ report_possible_deadlock(State) ->
                         {[Ticket|Tickets], SBlocked}
                 end;
             _Else ->
+                ExploreN = last_trace_n(State) + 1,
                 case TraceTop#trace_state.sleep_set =/= []
                     andalso TraceTop#trace_state.done =:= [] of
                     false ->
+                        concuerror_graph:backtrack(ExploreN, normal),
                         {Tickets, SBlocked};
                     true ->
+                        concuerror_graph:backtrack(ExploreN, sleep_set_block),
                         ?debug("SLEEP SET BLOCK\n"),
                         {Tickets, SBlocked+1}
                 end
@@ -1453,3 +1466,7 @@ dynamic_loop_acc(Fun, Arg) ->
         {done, Ret} -> Ret;
         {cont, NewArg} -> dynamic_loop_acc(Fun, NewArg)
     end.
+
+last_trace_n(DporState) ->
+    [LastTrace|_] = DporState#dpor_state.trace,
+    LastTrace#trace_state.i.

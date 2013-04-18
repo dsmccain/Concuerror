@@ -61,6 +61,7 @@
     | {'ignore_timeout', pos_integer()}
     | {'ignore',  [module()]}
     | {'cycle',   concuerror_sched:cycle_repetitions()}
+    | {'graph',  file:filename()}
     | {'help'}.
 
 -type options() :: [option()].
@@ -128,6 +129,14 @@ cliAux(Options) ->
     concuerror_util:timer_init(),
     %% Start the log manager.
     _ = concuerror_log:start(),
+    %% Start the graph manager.
+    _ = concuerror_graph:start(),
+    case lists:keyfind('graph', 1, Options) of
+        {graph, File} ->
+            gen_event:add_handler(concuerror_graph, concuerror_graph, File),
+            ok;
+        false -> ok
+    end,
     %% Parse options
     case lists:keyfind('gui', 1, Options) of
         {'gui'} -> gui(Options);
@@ -163,6 +172,7 @@ cliAux(Options) ->
     end,
     %% Stop event handler
     concuerror_log:stop(),
+    concuerror_graph:stop(),
     %% Destroy timer table.
     concuerror_util:timer_destroy(),
     'true'.
@@ -222,8 +232,7 @@ parse([{Opt, Param} | Args], Options) ->
         "I" ->
             case Param of
                 [Par] ->
-                    NewOptions = keyAppend('include', 1,
-                        Options, [Par]),
+                    NewOptions = keyAppend('include', 1, Options, [Par]),
                     parse(Args, NewOptions);
                 _Other -> wrongArgument('number', Opt)
             end;
@@ -303,8 +312,7 @@ parse([{Opt, Param} | Args], Options) ->
         "-gui" ->
             case Param of
                 [] ->
-                    NewOptions = lists:keystore(gui, 1,
-                        Options, {gui}),
+                    NewOptions = lists:keystore(gui, 1, Options, {gui}),
                     parse(Args, NewOptions);
                 _Other -> wrongArgument('number', Opt)
             end;
@@ -390,6 +398,19 @@ parse([{Opt, Param} | Args], Options) ->
                             parse(Args, NewOptions);
                         _Other -> wrongArgument('type', Opt)
                     end;
+                _Other -> wrongArgument('number', Opt)
+            end;
+
+        "-graph" ->
+            case Param of
+                [] ->
+                    NewOptions = lists:keystore(graph, 1,
+                        Options, {graph, ?GRAPH_FILE}),
+                    parse(Args, NewOptions);
+                [File] ->
+                    NewOptions = lists:keystore(graph, 1,
+                        Options, {graph, File}),
+                    parse(Args, NewOptions);
                 _Other -> wrongArgument('number', Opt)
             end;
 
@@ -485,6 +506,8 @@ help() ->
      "                          Specify the number of times a sequence of\n"
      "                          actions must be repeated to be considered a\n"
      "                          cycle (default is inf)\n"
+     "  --graph     [file]      Writes graph information to the specified\n"
+     "                          file (default graph_info.txt)\n"
      "  --gui                   Run concuerror with graphics\n"
      "  --dpor                  Runs the experimental optimal DPOR version\n"
      "  --dpor_flanagan         Runs an experimental reference DPOR version\n"

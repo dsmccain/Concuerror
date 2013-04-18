@@ -78,7 +78,8 @@ CORE_MODULES = \
 	concuerror_io_server
 
 LOG_MODULES = \
-	concuerror_log
+	concuerror_log \
+	concuerror_graph
 
 UTEST_MODULES = \
 	concuerror_error_tests \

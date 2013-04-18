@@ -67,6 +67,10 @@
 -define(EXPORT_EXT,  ".txt").
 -define(EXPORT_FILE, "results" ++ ?EXPORT_EXT).
 
+%% Default graph file.
+-define(GRAPH_EXT,  ".txt").
+-define(GRAPH_FILE, "graph_info" ++ ?GRAPH_EXT).
+
 %% Internal error return code.
 -define(RET_INTERNAL_ERROR, 1).
 
