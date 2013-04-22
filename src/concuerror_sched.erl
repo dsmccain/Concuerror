@@ -22,10 +22,10 @@
 
 -export([notify/3, wait_poll_or_continue/0]).
 
--export_type([analysis_target/0, analysis_ret/0, bound/0, cycle_repetitions/0,
+-export_type([analysis_target/0, analysis_ret/0, bound/0, cycle_detection/0,
         transition/0]).
 
--define(DEBUG, true).
+%%-define(DEBUG, true).
 -include("gen.hrl").
 
 %%%----------------------------------------------------------------------
@@ -60,6 +60,17 @@
                   lid :: concuerror_lid:lid() | 'not_found',
                   misc = empty :: term()}).
 
+%% Cycle detection parameter information
+%%
+%% seq_rep_for_cycle: Integer describing the number of times a sequence has to
+%%                    repeat to be considered a cycle.
+%% max_seq_size     : The maximum sequence size to be considered in the cycle
+%%                    detection.
+%% detection_freq   : How many actions must occur for another cycle detection to
+%%                    start.
+-record(cycle_detection_info, {seq_rep_for_cycle :: pos_integer(),
+                               max_seq_size      :: pos_integer() | 'inf',
+                               detection_freq    :: pos_integer()}).
 %%%----------------------------------------------------------------------
 %%% Types
 %%%----------------------------------------------------------------------
@@ -80,7 +91,8 @@
 
 -type bound() :: 'inf' | non_neg_integer().
 
--type cycle_repetitions() :: 'inf' | pos_integer().
+-type cycle_detection() ::
+    'none' | {pos_integer(), pos_integer() | 'inf', pos_integer()}.
 
 %% Scheduler notification.
 
@@ -116,11 +128,14 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
             {dpor, Flavor} -> Flavor;
             false -> 'none'
         end,
-    CycleReps =
+    CycleInfo =
         case lists:keyfind(cycle, 1, Options) of
-            {cycle, inf} -> ?INFINITY;
-            {cycle, Repetitions} -> Repetitions;
-            false -> ?DEFAULT_CYCLE_REPS
+            {cycle, Info} ->
+                {SeqN, SeqS, Freq} = Info,
+                #cycle_detection_info{seq_rep_for_cycle = SeqN,
+                                      max_seq_size = SeqS,
+                                      detection_freq = Freq};
+            false -> ?DEFAULT_CYCLE_DETECTION
         end,
     Ret =
         case concuerror_instr:instrument_and_compile(Files, Options) of
@@ -135,7 +150,7 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
                 %% Reset the internal state for the progress logger
                 concuerror_log:reset(),
                 {T1, _} = statistics(wall_clock),
-                Result = interleave(NewTarget, PreBound, Dpor, CycleReps,
+                Result = interleave(NewTarget, PreBound, Dpor, CycleInfo,
                     Options),
                 {T2, _} = statistics(wall_clock),
                 {Mins, Secs} = concuerror_util:to_elapsed_time(T1, T2),
@@ -170,9 +185,9 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
     Ret.
 
 %% Produce all possible process interleavings of (Mod, Fun, Args).
-interleave(Target, PreBound, Dpor, CycleReps, Options) ->
+interleave(Target, PreBound, Dpor, CycleInfo, Options) ->
     Self = self(),
-    Fun = fun() -> interleave_aux(Target, PreBound, Self, Dpor, CycleReps,
+    Fun = fun() -> interleave_aux(Target, PreBound, Self, Dpor, CycleInfo,
                 Options) end,
     process_flag(trap_exit, true),
     Backend = spawn_link(Fun),
@@ -183,10 +198,10 @@ interleave(Target, PreBound, Dpor, CycleReps, Options) ->
             concuerror_log:internal(Msg)
     end.
 
-interleave_aux(Target, PreBound, Parent, Dpor, CycleReps, Options) ->
+interleave_aux(Target, PreBound, Parent, Dpor, CycleInfo, Options) ->
     ?debug("Dpor is not really ready yet...\n"),
     register(?RP_SCHED, self()),
-    Result = interleave_dpor(Target, PreBound, Dpor, CycleReps, Options),
+    Result = interleave_dpor(Target, PreBound, Dpor, CycleInfo, Options),
     unregister(?RP_SCHED),
     Parent ! {interleave_result, Result}.
 
@@ -229,11 +244,11 @@ empty_clock_map() -> dict:new().
           proc_before  = []       :: [pid()],
           dpor_flavor  = 'none'   :: 'full' | 'flanagan' | 'none',
           preemption_bound = inf  :: non_neg_integer() | 'inf',
-          cycle_rep_limit  = inf  :: pos_integer() | 'inf',
+          cycle_detection = none  :: cycle_detection(),
           group_leader            :: pid()
          }).
 
-interleave_dpor(Target, PreBound, Dpor, CycleReps, Options) ->
+interleave_dpor(Target, PreBound, Dpor, CycleInfo, Options) ->
     ?debug("Interleave dpor!\n"),
     Procs = processes(),
     %% To be able to clean up we need to be trapping exits...
@@ -244,7 +259,7 @@ interleave_dpor(Target, PreBound, Dpor, CycleReps, Options) ->
     ?debug("Target started!\n"),
     NewState = #dpor_state{trace = Trace, target = Target, proc_before = Procs,
         dpor_flavor = Dpor, preemption_bound = PreBound,
-        cycle_rep_limit = CycleReps, show_output = ShowOutput,
+        cycle_detection = CycleInfo, show_output = ShowOutput,
         group_leader = GroupLeader},
     explore(NewState).
 
@@ -294,24 +309,30 @@ explore(MightNeedReplayState) ->
                         AllAddState = add_all_backtracks(UpdState),
                         NewState = add_some_next_to_backtrack(AllAddState),
                         ExploreN = last_trace_n(NewState),
-                        % TODO: Prettify the selected action
+                        % Send what has happened to the graph logger
                         [TraceTop|_] = NewState#dpor_state.trace,
-                        {_, Action, _} = TraceTop#trace_state.last,
-                        ActionStr = erlang:tuple_to_list(Action),
-                        concuerror_graph:action(ExploreN, ActionStr),
+                        Transition = TraceTop#trace_state.last,
+                        % % Change action format to one that can be changed to a
+                        % % string by concuerror_proc_action
+                        % {Inst, _} = convert_error_trace(Transition, sets:new()),
+                        % Action = lists:flatten(
+                        %     concuerror_proc_action:to_string(Inst)),
+                        {_, Instr, _} = Transition,
+                        Action = erlang:tuple_to_list(Instr),
+                        concuerror_graph:action(ExploreN, Action),
                         ExploreState = case findCycle(NewState) of
                             false -> NewState;
-                            CycleInfo ->
+                            _True ->
+                            % {true, Cycle} ->
                                 concuerror_graph:cycle(ExploreN),
-                                {_, Cycle} = CycleInfo,
-                                ?debug("Possible cycle detected"
-                                    ++ " (~p consecutive sequences):\n    ~p\n",
-                                    [NewState#dpor_state.cycle_rep_limit,
-                                      begin
-                                        CorrectedCycle = lists:reverse(Cycle),
-                                        lists:zip(lists:seq(1,length(Cycle)),
-                                            CorrectedCycle)
-                                      end]),
+                            %     ?debug("Possible cycle detected"
+                            %         ++ " (~p consecutive sequences):\n    ~p\n",
+                            %         [NewState#dpor_state.cycle_detection#cycle_detection_info.seq_rep_for_cycle,
+                            %           begin
+                            %             CorrectedCycle = lists:reverse(Cycle),
+                            %             lists:zip(lists:seq(1,length(Cycle)),
+                            %                 CorrectedCycle)
+                            %           end]),
                                 #dpor_state{trace = [TraceTop|RestTrace] = Trace,
                                     tickets = Tickets} = NewState,
                                 Blocked = TraceTop#trace_state.blocked,
@@ -342,55 +363,67 @@ explore(MightNeedReplayState) ->
         end
     end.
 
-% Change impure information to a format where a cycle might be detected.
-action_info(Msg) ->
-    if
-        erlang:is_pid(Msg) -> pid;
-        erlang:is_tuple(Msg) ->
-            MsgAsList = erlang:tuple_to_list(Msg),
-            erlang:list_to_tuple(action_info(MsgAsList));
-        erlang:is_list(Msg) ->
-            lists:map(fun(E) -> action_info(E) end, Msg);
-        true -> {info, Msg}
-    end.
-
-findCycle(#dpor_state{cycle_rep_limit = RepetitionLimit} = State)
-  when RepetitionLimit =/= ?INFINITY ->
-    Trace = State#dpor_state.trace,
-    ActionList = lists:map(fun(T) ->
-                {TLid, Action, _} = T#trace_state.last,
-                {TLid, action_info(Action)}
-        end, Trace),
+findCycle(#dpor_state{cycle_detection = none}) -> false;
+findCycle(#dpor_state{cycle_detection = DetectionInfo, trace = Trace}) ->
     [TraceTop|_] = Trace,
     % The amount of actions that have occurred up to this moment:
-    ActionLen = TraceTop#trace_state.i + 1,
+    ActionN = TraceTop#trace_state.i + 1,
     %% % Info about all previous taken actions
     %% ?debug("=> Taken actions up to this moment: ~p\n",
     %%     [begin
-    %%         Ns = lists:reverse(lists:seq(1, ActionLen)),
+    %%         ActionList = lists:map(fun(T) ->
+    %%                     {TLid, Action, _} = T#trace_state.last,
+    %%                     {TLid, Action}
+    %%             end, Trace),
+    %%         Ns = lists:reverse(lists:seq(1, ActionN)),
     %%         lists:zip(Ns, ActionList)
     %%     end]),
-    findCycle(ActionList, ActionLen, RepetitionLimit, 2);
-findCycle(_) -> false.
-
-findCycle(ActionList, ActionLength, RepeatLimit, SeqN) ->
-    ActionsToCheck = RepeatLimit * SeqN,
-    case ActionsToCheck > ActionLength of
+    DetectFreq = DetectionInfo#cycle_detection_info.detection_freq,
+    case ActionN rem DetectFreq =:= 0 of
         true ->
-            % TODO: This is useful if the cycle detection isn't executed for
-            % every action made. Let user specify how often to check?
-            case ActionLength < 2 * RepeatLimit of
+            ActionList = lists:map(fun(T) ->
+                        {TLid, Action, _} = T#trace_state.last,
+                        {TLid, Action}
+                end, Trace),
+            #cycle_detection_info{seq_rep_for_cycle = SeqRepsForCycle,
+                max_seq_size = MaxSeqSize} = DetectionInfo,
+            findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize,
+                DetectFreq, 1);
+        false -> false
+    end.
+
+% TODO: With a cycle detection frequency > the amount of sequence repetitions
+% for a cycle to be considered found, the same cycle might be detected multiple
+% times. Save cycles in dpor_state?
+findCycle(_, _, _, _, 0, _) -> false;
+findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, DetectFreq, SeqN) ->
+    ActionsToCheck = SeqRepsForCycle * SeqN,
+    case ActionsToCheck > ActionN of
+        true ->
+            case ActionN < SeqRepsForCycle of
                 true -> false;
                 false ->
                     [_|NewActions] = ActionList,
-                    findCycle(NewActions, ActionLength - 1, RepeatLimit, 2)
+                    findCycle(NewActions, ActionN - 1, SeqRepsForCycle,
+                        MaxSeqSize, DetectFreq, 1)
             end;
         false ->
             SeqToCheck = lists:sublist(ActionList, SeqN),
-            RepeatedSeq = lists:concat(lists:duplicate(RepeatLimit, SeqToCheck)),
+            RepeatedSeq = lists:concat(lists:duplicate(SeqRepsForCycle,
+                    SeqToCheck)),
             case lists:prefix(RepeatedSeq, ActionList) of
                 true -> {true, SeqToCheck}; % Shows the repeating sequence
-                false -> findCycle(ActionList, ActionLength, RepeatLimit, SeqN+1)
+                false ->
+                    NextSeqN = SeqN + 1,
+                    case MaxSeqSize =:= inf orelse NextSeqN =< MaxSeqSize of
+                        true ->
+                            findCycle(ActionList, ActionN, SeqRepsForCycle,
+                                MaxSeqSize, DetectFreq, NextSeqN);
+                        false ->
+                            [_|NewActions] = ActionList,
+                            findCycle(NewActions, ActionN - 1, SeqRepsForCycle,
+                                MaxSeqSize, DetectFreq - 1, 1)
+                    end
             end
     end.
 

@@ -60,7 +60,7 @@
     | {'wait_messages'}
     | {'ignore_timeout', pos_integer()}
     | {'ignore',  [module()]}
-    | {'cycle',   concuerror_sched:cycle_repetitions()}
+    | {'cycle',   concuerror_sched:cycle_detection()}
     | {'graph',  file:filename()}
     | {'help'}.
 
@@ -385,20 +385,56 @@ parse([{Opt, Param} | Args], Options) ->
             end;
 
         "-cycle-detect" ->
-            case Param of
-                [SeqReps] ->
-                    case string:to_integer(SeqReps) of
-                        {I, []} when I >= 2 ->
-                            NewOptions = lists:keystore(cycle, 1, Options,
-                                {cycle, I}),
-                            parse(Args, NewOptions);
-                        _ when SeqReps =:= "inf" ->
-                            NewOptions = lists:keystore(cycle, 1, Options,
-                                {cycle, inf}),
-                            parse(Args, NewOptions);
-                        _Other -> wrongArgument('type', Opt)
+            Check = fun(P, N) -> case string:to_integer(P) of
+                                    {I, []} when I >= N -> I;
+                                    _Else -> error
+                                end
+                            end,
+            CycleOpts = case Param of
+                [SeqRepetitions|Rest] ->
+                    case Check(SeqRepetitions, 2) of
+                        error -> {error, type};
+                        SeqN ->
+                            case Rest of
+                                ["inf"|RRest] ->
+                                    case RRest of
+                                        [] -> {SeqN, inf,
+                                                ?DEFAULT_CYCLE_CHECK_FREQ};
+                                        [CheckFreq] ->
+                                            case Check(CheckFreq, 1) of
+                                                error -> {error, type};
+                                                Freq -> {SeqN, inf, Freq}
+                                            end;
+                                        _Other -> {error, number}
+                                    end;
+                                [MaxSeqSize|RRest] ->
+                                    case Check(MaxSeqSize, 1) of
+                                        error -> {error, type};
+                                        SeqS ->
+                                            case RRest of
+                                                [] -> {SeqN, SeqS,
+                                                        ?DEFAULT_CYCLE_CHECK_FREQ};
+                                                [CheckFreq] ->
+                                                    case Check(CheckFreq, 1) of
+                                                        error -> {error, type};
+                                                        Freq -> {SeqN, SeqS, Freq}
+                                                    end;
+                                                _Other -> {error, number}
+                                            end
+                                    end;
+                                [] -> {SeqN, ?DEFAULT_CYCLE_MAX_SEQ_SIZE,
+                                        ?DEFAULT_CYCLE_CHECK_FREQ}
+                            end
                     end;
-                _Other -> wrongArgument('number', Opt)
+                % No arguments given
+                _Other -> {error, number}
+            end,
+            case CycleOpts of
+                {error, Type} -> wrongArgument(Type, Opt);
+                _Else ->
+                    NewOptions = lists:keystore(cycle, 1, Options,
+                        {cycle,CycleOpts}),
+                    parse(Args, NewOptions)
             end;
 
         "-graph" ->
@@ -502,10 +538,14 @@ help() ->
      "  --wait-messages         Wait for uninstrumented messages to arrive\n"
      "  -T|--ignore-timeout bound\n"
      "                          Treat big after Timeouts as infinity timeouts\n"
-     "  --cycle-detect  number|inf\n"
-     "                          Specify the number of times a sequence of\n"
-     "                          actions must be repeated to be considered a\n"
-     "                          cycle (default is inf)\n"
+     "  --cycle-detect number1 [number2|inf [number3]]\n"
+     "                          Specify the number1 of times (minimum of 2) a\n"
+     "                          sequence of actions of a maximum length of\n"
+     "                          number2 (default is inf: as many actions\n"
+     "                          as possible in the list of actions) must be\n"
+     "                          repeated to be considered a cycle. The cycle\n"
+     "                          detection is executed every number3 actions\n"
+     "                          (default is 1)\n"
      "  --graph     [file]      Writes graph information to the specified\n"
      "                          file (default graph_info.txt)\n"
      "  --gui                   Run concuerror with graphics\n"
