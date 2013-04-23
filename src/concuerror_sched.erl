@@ -322,8 +322,7 @@ explore(MightNeedReplayState) ->
                         concuerror_graph:action(ExploreN, Action),
                         ExploreState = case findCycle(NewState) of
                             false -> NewState;
-                            _True ->
-                            % {true, Cycle} ->
+                            {true, Cycle} ->
                                 concuerror_graph:cycle(ExploreN),
                             %     ?debug("Possible cycle detected"
                             %         ++ " (~p consecutive sequences):\n    ~p\n",
@@ -335,11 +334,7 @@ explore(MightNeedReplayState) ->
                             %           end]),
                                 #dpor_state{trace = [TraceTop|RestTrace] = Trace,
                                     tickets = Tickets} = NewState,
-                                Blocked = TraceTop#trace_state.blocked,
-                                % TODO: Add cycle to concuerror_sched.erl?
-                                %       Error = {cycle, Blocked},
-                                %%%%%
-                                Error = {exception, Blocked},
+                                Error = {cycle, Cycle},
                                 LidTrace = convert_trace_to_error_trace(Trace, []),
                                 Ticket = create_ticket(Error, LidTrace),
                                 %% Report error
@@ -614,7 +609,7 @@ add_all_backtracks_trace(Transition, Lid, ClockVector, PreBound, Flavor,
         case I > Clock andalso concuerror_deps:dependent(Transition, SI) of
             false -> {continue, Lid, ClockVector};
             true ->
-                %%%%% ?debug("~4w: ~P Clock ~p\n", [I, SI, ?DEBUG_DEPTH, Clock]),
+                ?debug("~4w: ~P Clock ~p\n", [I, SI, ?DEBUG_DEPTH, Clock]),
                 [#trace_state{enabled = Enabled,
                               backtrack = Backtrack,
                               sleep_set = SleepSet,
@@ -627,13 +622,13 @@ add_all_backtracks_trace(Transition, Lid, ClockVector, PreBound, Flavor,
                                             I, ClockVector, Acc),
                 case Flavor of
                     full ->
-                        %%%%% ?debug("  Backtrack: ~p\n", [Backtrack]),
-                        %%%%% ?debug("  Predecess: ~p\n", [Predecessor]),
-                        %%%%% ?debug("  SleepSet : ~p\n", [SleepSet]),
-                        %%%%% ?debug("  Initial  : ~p\n", [Initial]),
+                        ?debug("  Backtrack: ~p\n", [Backtrack]),
+                        ?debug("  Predecess: ~p\n", [Predecessor]),
+                        ?debug("  SleepSet : ~p\n", [SleepSet]),
+                        ?debug("  Initial  : ~p\n", [Initial]),
                         case Predecessor of
                             [] ->
-                                %%%%% ?debug("    All sleeping...\n"),
+                                ?debug("    All sleeping...\n"),
                                 NewClockVector =
                                     lookup_clock(ProcSI, ClockMap),
                                 MaxClockVector =
@@ -645,13 +640,13 @@ add_all_backtracks_trace(Transition, Lid, ClockVector, PreBound, Flavor,
                                 NewBacktrack =
                                     case Intersection =/= [] of
                                         true ->
-                                            %%%%% ?debug("    Init in backtrack\n"),
+                                            ?debug("    Init in backtrack\n"),
                                             Backtrack;
                                         false ->
-                                            %%%%% ?debug("    Add: ~p\n", [P]),
+                                            ?debug("    Add: ~p\n", [P]),
                                             ordsets:add_element(P ,Backtrack)
                                     end,
-                                %%%%% ?debug("    NewBacktrack: ~p\n",[NewBacktrack]),
+                                ?debug("    NewBacktrack: ~p\n",[NewBacktrack]),
                                 {done,
                                  [PreSI#trace_state{backtrack = NewBacktrack}
                                   |Rest]}
@@ -905,7 +900,7 @@ filter_awaked(SleepSet, Nexts, Selected) ->
         fun(Lid) ->
                 Instr = dict:fetch(Lid, Nexts),
                 Dep = concuerror_deps:dependent(Instr, Selected),
-                %%%%% ?debug(" vs ~p: ~p\n",[Instr, Dep]),
+                ?debug(" vs ~p: ~p\n",[Instr, Dep]),
                 not Dep
         end,
     [S || S <- SleepSet, Filter(S)].

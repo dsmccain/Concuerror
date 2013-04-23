@@ -20,7 +20,9 @@
 
 -include("gen.hrl").
 
--type error_type()  :: 'assertion_violation' | 'deadlock' | 'exception'.
+-type error_type()  ::
+    'assertion_violation' | 'deadlock' | 'exception' | 'cycle'.
+
 -type error()       :: {error_type(), term()}.
 
 -spec new(term()) -> error().
@@ -34,7 +36,8 @@ new(Reason) -> {exception, Reason}.
 
 type({deadlock, _Blocked}) -> "Deadlock";
 type({assertion_violation, _Details}) -> "Assertion violation";
-type({exception, _Details}) -> "Exception".
+type({exception, _Details}) -> "Exception";
+type({cycle, _Details}) -> "Cycle".
 
 -spec short(error()) -> nonempty_string().
 
@@ -47,7 +50,9 @@ short({assertion_violation, [{module, Module}, {line, Line}|_Rest]}) ->
     OldModule = concuerror_instr:old_module_name(Module),
     concuerror_util:flat_format("~p.erl:~p", [OldModule, Line]);
 short({exception, Reason}) ->
-    lists:flatten(io_lib:format("~W", [Reason, 3])).
+    lists:flatten(io_lib:format("~W", [Reason, 3]));
+short({cycle, Details}) ->
+    concuerror_util:flat_format("~p", [Details]).
 
 -spec long(error()) -> nonempty_string().
 
@@ -66,6 +71,10 @@ long({assertion_violation,
 long({exception, Details}) ->
     Format = "Error type        : Exception~n"
              "Details           : ~p",
+    concuerror_util:flat_format(Format, [Details]);
+long({cycle, Details}) ->
+    Format = "Error type        : Cycle~n"
+             "Detected cycle    : ~p",
     concuerror_util:flat_format(Format, [Details]).
 
 -spec mock() -> {'exception', 'foobar'}.
