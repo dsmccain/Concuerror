@@ -385,46 +385,22 @@ parse([{Opt, Param} | Args], Options) ->
             end;
 
         "-cycle-detect" ->
-            Check = fun(P, N) -> case string:to_integer(P) of
-                                    {I, []} when I >= N -> I;
-                                    _Else -> error
-                                end
-                            end,
             CycleOpts = case Param of
                 [SeqRepetitions|Rest] ->
-                    case Check(SeqRepetitions, 2) of
-                        error -> {error, type};
-                        SeqN ->
+                    case string:to_integer(SeqRepetitions) of
+                        {SeqN, []} when SeqN > 1 ->
                             case Rest of
-                                ["inf"|RRest] ->
-                                    case RRest of
-                                        [] -> {SeqN, inf,
-                                                ?DEFAULT_CYCLE_CHECK_FREQ};
-                                        [CheckFreq] ->
-                                            case Check(CheckFreq, 1) of
-                                                error -> {error, type};
-                                                Freq -> {SeqN, inf, Freq}
-                                            end;
-                                        _Other -> {error, number}
+                                ["inf"] -> {SeqN, inf};
+                                [MaxSeqSize] ->
+                                    case string:to_integer(MaxSeqSize) of
+                                        {SeqS, []} when SeqS > 0 ->
+                                            {SeqN, SeqS};
+                                        _Other -> {error, type}
                                     end;
-                                [MaxSeqSize|RRest] ->
-                                    case Check(MaxSeqSize, 1) of
-                                        error -> {error, type};
-                                        SeqS ->
-                                            case RRest of
-                                                [] -> {SeqN, SeqS,
-                                                        ?DEFAULT_CYCLE_CHECK_FREQ};
-                                                [CheckFreq] ->
-                                                    case Check(CheckFreq, 1) of
-                                                        error -> {error, type};
-                                                        Freq -> {SeqN, SeqS, Freq}
-                                                    end;
-                                                _Other -> {error, number}
-                                            end
-                                    end;
-                                [] -> {SeqN, ?DEFAULT_CYCLE_MAX_SEQ_SIZE,
-                                        ?DEFAULT_CYCLE_CHECK_FREQ}
-                            end
+                                [] -> {SeqN, ?DEFAULT_CYCLE_MAX_SEQ_SIZE};
+                                _Other -> {error, number}
+                            end;
+                        _Other -> {error, type}
                     end;
                 % No arguments given
                 _Other -> {error, number}
@@ -538,14 +514,12 @@ help() ->
      "  --wait-messages         Wait for uninstrumented messages to arrive\n"
      "  -T|--ignore-timeout bound\n"
      "                          Treat big after Timeouts as infinity timeouts\n"
-     "  --cycle-detect number1 [number2|inf [number3]]\n"
+     "  --cycle-detect number1 [number2|inf]\n"
      "                          Specify the number1 of times (minimum of 2) a\n"
      "                          sequence of actions of a maximum length of\n"
      "                          number2 (default is inf: as many actions\n"
      "                          as possible in the list of actions) must be\n"
-     "                          repeated to be considered a cycle. The cycle\n"
-     "                          detection is executed every number3 actions\n"
-     "                          (default is 1)\n"
+     "                          repeated to be considered a cycle.\n"
      "  --graph     [file]      Writes graph information to the specified\n"
      "                          file (default graph_info.txt)\n"
      "  --gui                   Run concuerror with graphics\n"

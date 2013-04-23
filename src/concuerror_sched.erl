@@ -66,11 +66,8 @@
 %%                    repeat to be considered a cycle.
 %% max_seq_size     : The maximum sequence size to be considered in the cycle
 %%                    detection.
-%% detection_freq   : How many actions must occur for another cycle detection to
-%%                    start.
 -record(cycle_detection_info, {seq_rep_for_cycle :: pos_integer(),
-                               max_seq_size      :: pos_integer() | 'inf',
-                               detection_freq    :: pos_integer()}).
+                               max_seq_size      :: pos_integer() | 'inf'}).
 %%%----------------------------------------------------------------------
 %%% Types
 %%%----------------------------------------------------------------------
@@ -91,8 +88,7 @@
 
 -type bound() :: 'inf' | non_neg_integer().
 
--type cycle_detection() ::
-    'none' | {pos_integer(), pos_integer() | 'inf', pos_integer()}.
+-type cycle_detection() :: 'none' | {pos_integer(), pos_integer() | 'inf'}.
 
 %% Scheduler notification.
 
@@ -130,11 +126,9 @@ analyze({Mod,Fun,Args}=Target, Files, Options) ->
         end,
     CycleInfo =
         case lists:keyfind(cycle, 1, Options) of
-            {cycle, Info} ->
-                {SeqN, SeqS, Freq} = Info,
+            {cycle, {SeqN, SeqS}} ->
                 #cycle_detection_info{seq_rep_for_cycle = SeqN,
-                                      max_seq_size = SeqS,
-                                      detection_freq = Freq};
+                                      max_seq_size = SeqS};
             false -> ?DEFAULT_CYCLE_DETECTION
         end,
     Ret =
@@ -362,46 +356,26 @@ findCycle(#dpor_state{cycle_detection = none}) -> false;
 findCycle(#dpor_state{cycle_detection = DetectionInfo, trace = Trace}) ->
     [TraceTop|_] = Trace,
     % The amount of actions that have occurred up to this moment:
+    ActionList = lists:map(fun(T) ->
+                {TLid, Action, _} = T#trace_state.last,
+                {TLid, Action}
+        end, Trace),
     ActionN = TraceTop#trace_state.i + 1,
     %% % Info about all previous taken actions
     %% ?debug("=> Taken actions up to this moment: ~p\n",
     %%     [begin
-    %%         ActionList = lists:map(fun(T) ->
-    %%                     {TLid, Action, _} = T#trace_state.last,
-    %%                     {TLid, Action}
-    %%             end, Trace),
     %%         Ns = lists:reverse(lists:seq(1, ActionN)),
     %%         lists:zip(Ns, ActionList)
     %%     end]),
-    DetectFreq = DetectionInfo#cycle_detection_info.detection_freq,
-    case ActionN rem DetectFreq =:= 0 of
-        true ->
-            ActionList = lists:map(fun(T) ->
-                        {TLid, Action, _} = T#trace_state.last,
-                        {TLid, Action}
-                end, Trace),
-            #cycle_detection_info{seq_rep_for_cycle = SeqRepsForCycle,
-                max_seq_size = MaxSeqSize} = DetectionInfo,
-            findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize,
-                DetectFreq, 1);
-        false -> false
-    end.
+    #cycle_detection_info{seq_rep_for_cycle = SeqRepsForCycle,
+                          max_seq_size = MaxSeqSize} = DetectionInfo,
+    findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, 1).
 
-% TODO: With a cycle detection frequency > the amount of sequence repetitions
-% for a cycle to be considered found, the same cycle might be detected multiple
-% times. Save cycles in dpor_state?
-findCycle(_, _, _, _, 0, _) -> false;
-findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, DetectFreq, SeqN) ->
+findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, SeqN) ->
     ActionsToCheck = SeqRepsForCycle * SeqN,
-    case ActionsToCheck > ActionN of
-        true ->
-            case ActionN < SeqRepsForCycle of
-                true -> false;
-                false ->
-                    [_|NewActions] = ActionList,
-                    findCycle(NewActions, ActionN - 1, SeqRepsForCycle,
-                        MaxSeqSize, DetectFreq, 1)
-            end;
+    case (MaxSeqSize =/= inf andalso SeqN > MaxSeqSize)
+        orelse ActionsToCheck > ActionN of
+        true -> false;
         false ->
             SeqToCheck = lists:sublist(ActionList, SeqN),
             RepeatedSeq = lists:concat(lists:duplicate(SeqRepsForCycle,
@@ -409,16 +383,8 @@ findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, DetectFreq, SeqN) ->
             case lists:prefix(RepeatedSeq, ActionList) of
                 true -> {true, SeqToCheck}; % Shows the repeating sequence
                 false ->
-                    NextSeqN = SeqN + 1,
-                    case MaxSeqSize =:= inf orelse NextSeqN =< MaxSeqSize of
-                        true ->
-                            findCycle(ActionList, ActionN, SeqRepsForCycle,
-                                MaxSeqSize, DetectFreq, NextSeqN);
-                        false ->
-                            [_|NewActions] = ActionList,
-                            findCycle(NewActions, ActionN - 1, SeqRepsForCycle,
-                                MaxSeqSize, DetectFreq - 1, 1)
-                    end
+                    findCycle(ActionList, ActionN, SeqRepsForCycle,
+                        MaxSeqSize, SeqN + 1)
             end
     end.
 

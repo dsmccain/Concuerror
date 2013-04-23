@@ -59,7 +59,6 @@
 %% Default options
 -define(DEFAULT_PREB, 2).
 -define(DEFAULT_CYCLE_MAX_SEQ_SIZE, 'inf').
--define(DEFAULT_CYCLE_CHECK_FREQ, 1).
 -define(DEFAULT_CYCLE_DETECTION, 'none').
 -define(DEFAULT_INCLUDE, []).
 -define(DEFAULT_DEFINE, []).
