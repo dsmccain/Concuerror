@@ -311,9 +311,8 @@ explore(MightNeedReplayState) ->
                         % {Inst, _} = convert_error_trace(Transition, sets:new()),
                         % Action = lists:flatten(
                         %     concuerror_proc_action:to_string(Inst)),
-                        {_, Instr, _} = Transition,
-                        Action = erlang:tuple_to_list(Instr),
-                        concuerror_graph:action(ExploreN, Action),
+                        {Lid, Instr, _} = Transition,
+                        concuerror_graph:action(ExploreN, {Lid, Instr}),
                         ExploreState = case findCycle(NewState) of
                             false -> NewState;
                             {true, Cycle} ->

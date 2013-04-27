@@ -15,7 +15,7 @@
 %% Non gen_evt exports.
 -export([internal/1, internal/2]).
 %% Log API exports.
--export([start/0, stop/0, action/2, action/3, backtrack/2, error/1, cycle/1]).
+-export([start/0, stop/0, action/2, backtrack/2, error/1, cycle/1]).
 %% Log callback exports.
 -export([init/1, terminate/2, handle_call/2, handle_info/2,
          handle_event/2, code_change/3]).
@@ -40,6 +40,14 @@
 -export_type([backtrack_type/0, event/0, state/0]).
 
 %%%----------------------------------------------------------------------
+%%% Definitions
+%%%----------------------------------------------------------------------
+
+%% Printing depth of terms like messages or exit reasons.
+-define(PRINT_DEPTH, 4).
+-define(PRINT_DEPTH_EXIT, 10).
+
+%%%----------------------------------------------------------------------
 %%% Non gen_evt functions.
 %%%----------------------------------------------------------------------
 
@@ -57,6 +65,99 @@ internal(String, Args) ->
     group_leader(InitPid, self()),
     io:format("(Internal) " ++ String, Args),
     halt(?RET_INTERNAL_ERROR).
+
+
+action_string({Proc, {error, [Type, Kind|_]}})
+    when Type =:= error; Type =:= throw ->
+    Msg = concuerror_error:type(concuerror_error:new({Kind, foo})),
+    concuerror_util:flat_format("~s exits (~P)",
+        [concuerror_lid:to_string(Proc), Msg, ?PRINT_DEPTH_EXIT]);
+action_string({Proc, {exit, _Extra}}) ->
+    concuerror_util:flat_format("~s exits (~P)",
+        [concuerror_lid:to_string(Proc), normal, ?PRINT_DEPTH_EXIT]);
+action_string({Proc, block}) ->
+    concuerror_util:flat_format("~s blocks", [concuerror_lid:to_string(Proc)]);
+action_string({Proc, {send, {Orig, Dest, Msg}}}) ->
+    NewDest =
+    case is_atom(Orig) of
+        true -> {name, Orig};
+        false -> Dest
+    end,
+    concuerror_util:flat_format("~s sends message `~W` to process ~s",
+        [concuerror_lid:to_string(Proc), Msg, ?PRINT_DEPTH,
+            concuerror_lid:to_string(NewDest)]);
+action_string({Proc, {'receive', Extra}}) ->
+    {_Tag, Origin, Msg} = Extra,
+    concuerror_util:flat_format("~s receives message `~W` from process ~s",
+        [concuerror_lid:to_string(Proc), Msg, ?PRINT_DEPTH,
+            concuerror_lid:to_string(Origin)]);
+action_string({Proc, {'after', _Extra}}) ->
+    concuerror_util:flat_format("~s receives no matching messages",
+        [concuerror_lid:to_string(Proc)]);
+action_string({Proc, {is_process_alive, Extra}}) ->
+    concuerror_util:flat_format("~s checks if process ~s is alive",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Extra)]);
+action_string({Proc, {register, {Name, TLid}}}) ->
+    concuerror_util:flat_format("~s registers process ~s as `~p`",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(TLid), Name]);
+action_string({Proc, {whereis, {Name, TLid}}}) ->
+    concuerror_util:flat_format("~s requests the pid of process `~p` (~s)",
+        [concuerror_lid:to_string(Proc), Name, concuerror_lid:to_string(TLid)]);
+action_string({Proc, {process_flag, Extra}}) ->
+    {Flag, Value, _Links} = Extra,
+    concuerror_util:flat_format("~s sets flag `~p` to `~p`",
+                  [concuerror_lid:to_string(Proc), Flag, Value]);
+action_string({Proc, {monitor, {TLid, _RefLid}}}) ->
+    concuerror_util:flat_format("~s monitors process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(TLid)]);
+action_string({Proc, {spawn_monitor, {TLid, _RefLid}}}) ->
+    concuerror_util:flat_format("~s spawns and monitors process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(TLid)]);
+action_string({Proc, {ets, Extra}}) ->
+    case Extra of
+        {insert, [_EtsLid, Tid, _K, _KP, Objects, _Status]} ->
+            concuerror_util:flat_format("~s: ~p ~p",
+                [concuerror_lid:to_string(Proc), ets_insert, {Tid, Objects}]);
+        {insert_new, [_EtsLid, Tid, _K, _KP, Objects, _Status]} ->
+            concuerror_util:flat_format("~s: ~p ~p",
+                [concuerror_lid:to_string(Proc), ets_insert_new, {Tid,
+                        Objects}]);
+        {delete, [_EtsLid, Tid]} ->
+            concuerror_util:flat_format("~s: ~p ~p",
+                [concuerror_lid:to_string(Proc), ets_delete, Tid]);
+        {C, [_EtsLid | Options]} ->
+            ListC = atom_to_list(C),
+            AtomC = list_to_atom("ets_" ++ ListC),
+            concuerror_util:flat_format("~s: ~p ~p",
+                [concuerror_lid:to_string(Proc), AtomC, list_to_tuple(Options)])
+    end;
+action_string({Proc, {demonitor, Extra}}) ->
+    concuerror_util:flat_format("~s demonitors process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Extra)]);
+action_string({Proc, {link, Extra}}) ->
+    concuerror_util:flat_format("~s links to process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Extra)]);
+action_string({Proc, {receive_no_instr, Msg}}) ->
+    concuerror_util:flat_format("~s receives message `~W` from unknown process",
+        [concuerror_lid:to_string(Proc), Msg, ?PRINT_DEPTH]);
+action_string({Proc, {spawn, Child}}) ->
+    concuerror_util:flat_format("~s spawns process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Child)]);
+action_string({Proc, {spawn_link, Child}}) ->
+    concuerror_util:flat_format("~s spawns and links to process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Child)]);
+action_string({Proc, {spawn_opt, Child}}) ->
+    concuerror_util:flat_format("~s spawns with opts to process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Child)]);
+action_string({Proc, {unlink, Extra}}) ->
+    concuerror_util:flat_format("~s unlinks from process ~s",
+        [concuerror_lid:to_string(Proc), concuerror_lid:to_string(Extra)]);
+action_string({Proc, {unregister, RegName}}) ->
+    concuerror_util:flat_format("~s unregisters process `~p`",
+        [concuerror_lid:to_string(Proc), RegName]);
+action_string({Proc, Other}) ->
+    concuerror_util:flat_format("~s: ~p", [concuerror_lid:to_string(Proc),
+            Other]).
 
 %%%----------------------------------------------------------------------
 %%% API functions
@@ -82,15 +183,11 @@ stop() ->
 
 %% ##########
 %% TODO:
--spec action(non_neg_integer(), string()) -> 'ok'.
-action(ExploreN, String) when is_integer(ExploreN), is_list(String) ->
-    action(ExploreN, String, []).
-
--spec action(non_neg_integer(), string(), [term()]) -> 'ok'.
-action(ExploreN, String, Args) when is_integer(ExploreN), is_list(String) ->
-    Msg = io_lib:format(String, Args),
-    LogArgs = [ExploreN, Msg],
-    LogMsg = io_lib:format("~p: action :: ~p\n", LogArgs),
+-spec action(non_neg_integer(), {concuerror_lid:lid(), term()}) -> 'ok'.
+action(ExploreN, {Lid, Instr}) when is_integer(ExploreN) ->
+    Action = action_string({Lid, Instr}),
+    LogMsg = concuerror_util:flat_format("~p: action :: ~p~n",
+        [ExploreN, Action]),
     gen_event:notify(concuerror_graph, {log, LogMsg}).
 
 -spec backtrack(non_neg_integer(), backtrack_type()) -> 'ok'.
@@ -116,8 +213,8 @@ cycle(ExploreN) when is_integer(ExploreN) ->
 -spec init(term()) -> {'ok', state()}.
 
 init(FileName) ->
-	{ok, Fd} = file:open(FileName, [write]),
-	{ok, Fd}.
+    {ok, Fd} = file:open(FileName, [write]),
+    {ok, Fd}.
 
 -spec terminate(term(), state()) -> 'ok'.
 
@@ -128,7 +225,7 @@ terminate(_Reason, File) ->
 -spec handle_event(event(), state()) -> {'ok', state()}.
 
 handle_event({log, String}, File) ->
-	file:write(File, String),
+    file:write(File, String),
     {ok, File}.
 
 -spec code_change(term(), term(), term()) -> no_return().
