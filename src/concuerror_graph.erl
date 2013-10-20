@@ -14,9 +14,9 @@
 -module(concuerror_graph).
 %% Non gen_evt exports.
 -export([internal/1, internal/2]).
-%% Log API exports.
+%% Action log API exports.
 -export([start/0, stop/0, action/2, backtrack/2, error/1, cycle/1]).
-%% Log callback exports.
+%% Action log callback exports.
 -export([init/1, terminate/2, handle_call/2, handle_info/2,
          handle_event/2, code_change/3]).
 
@@ -165,7 +165,7 @@ action_string({Proc, Other}) ->
 
 %% @spec start(atom(), term()) -> {'ok', pid()} |
 %%                                  {'error', {'already_started', pid()}}
-%% @doc: Starts the log event manager.
+%% @doc: Starts the action log event manager.
 %%
 %% `Mod' is the module containing the callback functions.
 %% `Args' are the arguments given to the callback function `Mod:init/1'.
@@ -175,33 +175,43 @@ start() ->
     gen_event:start({local, concuerror_graph}).
 
 %% @spec stop() -> 'ok'
-%% @doc: Terminates the log event manager.
+%% @doc: Terminates the action log event manager.
 -spec stop() -> 'ok'.
 
 stop() ->
     gen_event:stop(concuerror_graph).
 
-%% ##########
-%% TODO:
+%% @spec action(non_neg_integer(), {concuerror_lid:lid(), term()}) -> 'ok'.
+%% @doc: Logs an action.
 -spec action(non_neg_integer(), {concuerror_lid:lid(), term()}) -> 'ok'.
+
 action(ExploreN, {Lid, Instr}) when is_integer(ExploreN) ->
     Action = action_string({Lid, Instr}),
     LogMsg = concuerror_util:flat_format("~p: action :: ~p~n",
         [ExploreN, Action]),
     gen_event:notify(concuerror_graph, {log, LogMsg}).
 
+%% @spec backtrack(non_neg_integer(), backtrack_type()) -> 'ok'.
+%% @doc: Logs a backtrack.
 -spec backtrack(non_neg_integer(), backtrack_type()) -> 'ok'.
+
 backtrack(ExploreN, Type) when is_integer(ExploreN), is_atom(Type) ->
     LogArgs = [ExploreN, Type],
     LogMsg = io_lib:format("~p: backtrack :: ~p\n", LogArgs),
     gen_event:notify(concuerror_graph, {log, LogMsg}).
 
+%% @spec error(non_neg_integer()) -> 'ok'.
+%% @doc: Logs an error.
 -spec error(non_neg_integer()) -> 'ok'.
+
 error(ExploreN) when is_integer(ExploreN) ->
     LogMsg = io_lib:format("~p: error\n", [ExploreN]),
     gen_event:notify(concuerror_graph, {log, LogMsg}).
 
+%% @spec cycle(non_neg_integer()) -> 'ok'.
+%% @doc: Logs a cycle.
 -spec cycle(non_neg_integer()) -> 'ok'.
+
 cycle(ExploreN) when is_integer(ExploreN) ->
     LogMsg = io_lib:format("~p: cycle\n", [ExploreN]),
     gen_event:notify(concuerror_graph, {log, LogMsg}).

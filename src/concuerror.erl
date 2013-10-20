@@ -385,43 +385,44 @@ parse([{Opt, Param} | Args], Options) ->
             end;
 
         "-cycle-detect" ->
-            CycleOpts = case Param of
-                [SeqRepetitions|Rest] ->
-                    case string:to_integer(SeqRepetitions) of
-                        {SeqN, []} when SeqN > 1 ->
-                            case Rest of
-                                ["inf"] -> {SeqN, inf};
-                                [MaxSeqSize] ->
-                                    case string:to_integer(MaxSeqSize) of
-                                        {SeqS, []} when SeqS > 0 ->
-                                            {SeqN, SeqS};
-                                        _Other -> {error, type}
-                                    end;
-                                [] -> {SeqN, ?DEFAULT_CYCLE_MAX_SEQ_SIZE};
-                                _Other -> {error, number}
-                            end;
-                        _Other -> {error, type}
-                    end;
-                % No arguments given
-                _Other -> {error, number}
-            end,
+            CycleOpts =
+                case Param of
+                    [SeqRepetitions|Rest] ->
+                        case string:to_integer(SeqRepetitions) of
+                            {SeqN, []} when SeqN > 1 ->
+                                case Rest of
+                                    ["inf"] -> {SeqN, inf};
+                                    [MaxSeqSize] ->
+                                        case string:to_integer(MaxSeqSize) of
+                                            {SeqS, []} when SeqS > 0 ->
+                                                {SeqN, SeqS};
+                                            _Other -> {error, type}
+                                        end;
+                                    [] -> {SeqN, ?DEFAULT_CYCLE_MAX_SEQ_SIZE};
+                                    _Other -> {error, number}
+                                end;
+                            _Other -> {error, type}
+                        end;
+                    % No arguments given
+                    _Other -> {error, number}
+                end,
             case CycleOpts of
                 {error, Type} -> wrongArgument(Type, Opt);
                 _Else ->
-                    NewOptions = lists:keystore(cycle, 1, Options,
-                        {cycle,CycleOpts}),
+                    NewOptions =
+                        lists:keystore(cycle, 1, Options, {cycle, CycleOpts}),
                     parse(Args, NewOptions)
             end;
 
         "-graph" ->
             case Param of
                 [] ->
-                    NewOptions = lists:keystore(graph, 1,
-                        Options, {graph, ?GRAPH_FILE}),
+                    NewOptions =
+                        lists:keystore(graph, 1, Options, {graph, ?GRAPH_FILE}),
                     parse(Args, NewOptions);
                 [File] ->
-                    NewOptions = lists:keystore(graph, 1,
-                        Options, {graph, File}),
+                    NewOptions =
+                        lists:keystore(graph, 1, Options, {graph, File}),
                     parse(Args, NewOptions);
                 _Other -> wrongArgument('number', Opt)
             end;

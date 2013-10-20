@@ -303,43 +303,33 @@ explore(MightNeedReplayState) ->
                         AllAddState = add_all_backtracks(UpdState),
                         NewState = add_some_next_to_backtrack(AllAddState),
                         ExploreN = last_trace_n(NewState),
-                        % Send what has happened to the graph logger
+                        %% Send what has happened to the graph logger
                         [TraceTop|_] = NewState#dpor_state.trace,
                         Transition = TraceTop#trace_state.last,
-                        % % Change action format to one that can be changed to a
-                        % % string by concuerror_proc_action
-                        % {Inst, _} = convert_error_trace(Transition, sets:new()),
-                        % Action = lists:flatten(
-                        %     concuerror_proc_action:to_string(Inst)),
                         {Lid, Instr, _} = Transition,
                         concuerror_graph:action(ExploreN, {Lid, Instr}),
-                        ExploreState = case findCycle(NewState) of
-                            false -> NewState;
-                            {true, Cycle} ->
-                                concuerror_graph:cycle(ExploreN),
-                            %     ?debug("Possible cycle detected"
-                            %         ++ " (~p consecutive sequences):\n    ~p\n",
-                            %         [NewState#dpor_state.cycle_detection#cycle_detection_info.seq_rep_for_cycle,
-                            %           begin
-                            %             CorrectedCycle = lists:reverse(Cycle),
-                            %             lists:zip(lists:seq(1,length(Cycle)),
-                            %                 CorrectedCycle)
-                            %           end]),
-                                #dpor_state{trace = [TraceTop|RestTrace] = Trace,
-                                    tickets = Tickets} = NewState,
-                                Error = {cycle, Cycle},
-                                LidTrace = convert_trace_to_error_trace(Trace, []),
-                                Ticket = create_ticket(Error, LidTrace),
-                                %% Report error
-                                concuerror_log:progress({'error', Ticket}),
-                                %/%%%
-                                NewTickets = [Ticket|Tickets],
-                                NewState#dpor_state{
-                                    must_replay = true
-                                    , trace = RestTrace
-                                    , tickets = NewTickets
-                                }
-                        end,
+                        ExploreState =
+                            case findCycle(NewState) of
+                                false -> NewState;
+                                {true, Cycle} ->
+                                    concuerror_graph:cycle(ExploreN),
+                                    #dpor_state{
+                                       trace = [TraceTop|RestTrace] = Trace,
+                                       tickets = Tickets
+                                      } = NewState,
+                                    Error = {cycle, Cycle},
+                                    LidTrace =
+                                        convert_trace_to_error_trace(Trace, []),
+                                    Ticket = create_ticket(Error, LidTrace),
+                                    %% Report error
+                                    concuerror_log:progress({'error', Ticket}),
+                                    NewTickets = [Ticket|Tickets],
+                                    NewState#dpor_state{
+                                        must_replay = true
+                                        , trace = RestTrace
+                                        , tickets = NewTickets
+                                    }
+                            end,
                         explore(ExploreState)
                 end;
             none ->
@@ -354,18 +344,12 @@ explore(MightNeedReplayState) ->
 findCycle(#dpor_state{cycle_detection = none}) -> false;
 findCycle(#dpor_state{cycle_detection = DetectionInfo, trace = Trace}) ->
     [TraceTop|_] = Trace,
-    % The amount of actions that have occurred up to this moment:
+    %% The amount of actions that have occurred up to this moment:
     ActionList = lists:map(fun(T) ->
-                {TLid, Action, _} = T#trace_state.last,
-                {TLid, Action}
-        end, Trace),
+                                   {TLid, Action, _} = T#trace_state.last,
+                                   {TLid, Action}
+                           end, Trace),
     ActionN = TraceTop#trace_state.i + 1,
-    %% % Info about all previous taken actions
-    %% ?debug("=> Taken actions up to this moment: ~p\n",
-    %%     [begin
-    %%         Ns = lists:reverse(lists:seq(1, ActionN)),
-    %%         lists:zip(Ns, ActionList)
-    %%     end]),
     #cycle_detection_info{seq_rep_for_cycle = SeqRepsForCycle,
                           max_seq_size = MaxSeqSize} = DetectionInfo,
     findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, 1).
@@ -377,8 +361,8 @@ findCycle(ActionList, ActionN, SeqRepsForCycle, MaxSeqSize, SeqN) ->
         true -> false;
         false ->
             SeqToCheck = lists:sublist(ActionList, SeqN),
-            RepeatedSeq = lists:concat(lists:duplicate(SeqRepsForCycle,
-                    SeqToCheck)),
+            RepeatedSeq =
+                lists:concat(lists:duplicate(SeqRepsForCycle, SeqToCheck)),
             case lists:prefix(RepeatedSeq, ActionList) of
                 true -> {true, SeqToCheck}; % Shows the repeating sequence
                 false ->
@@ -1219,12 +1203,12 @@ report_possible_deadlock(State) ->
                 ExploreN = last_trace_n(State) + 1,
                 case TraceTop#trace_state.blocked of
                     [] ->
-                        concuerror_graph:backtrack(ExploreN, normal),
                         ?debug("NORMAL!\n"),
+                        concuerror_graph:backtrack(ExploreN, normal),
                         {Tickets, SBlocked};
                     Blocked ->
-                        concuerror_graph:backtrack(ExploreN, deadlock),
                         ?debug("DEADLOCK!\n"),
+                        concuerror_graph:backtrack(ExploreN, deadlock),
                         Error = {deadlock, Blocked},
                         LidTrace = convert_trace_to_error_trace(Trace, []),
                         Ticket = create_ticket(Error, LidTrace),
