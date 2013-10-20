@@ -37,6 +37,8 @@
                        {'demonitor', concuerror_lid:lid(),
                                     concuerror_lid:maybe_lid()} |
                        {'exit', concuerror_lid:lid(), term()} |
+                       {'exit_2', concuerror_lid:lid(),
+                                  concuerror_lid:lid(), term()} |
                        {'fun_exit', concuerror_lid:lid(),
                                     concuerror_lid:maybe_lid(), term()} |
                        {'halt', concuerror_lid:lid()} |
@@ -57,6 +59,10 @@
                                     atom(), concuerror_lid:lid()} |
                        {'send', concuerror_lid:lid(),
                                     concuerror_lid:maybe_lid(), term()} |
+                       {'send_after', concuerror_lid:lid(),
+                                    concuerror_lid:maybe_lid(), term()} |
+                       {'start_timer', concuerror_lid:lid(),
+                                    concuerror_lid:maybe_lid(), term()} |
                        {'spawn', concuerror_lid:maybe_lid(),
                                     concuerror_lid:lid()} |
                        {'spawn_link', concuerror_lid:maybe_lid(),
@@ -68,6 +74,8 @@
                        {'unlink', concuerror_lid:lid(),
                                     concuerror_lid:maybe_lid()} |
                        {'unregister', concuerror_lid:lid(), atom()} |
+                       {'port_command', concuerror_lid:lid(), port()} |
+                       {'port_control', concuerror_lid:lid(), port()} |
                        {'whereis', concuerror_lid:lid(), atom(),
                                     concuerror_lid:maybe_lid()}.
 
@@ -92,6 +100,11 @@ to_string({demonitor, Proc1, Proc2}) ->
 to_string({exit, Proc, Reason}) ->
     io_lib:format("Process ~s exits (~P)",
                   [concuerror_lid:to_string(Proc),
+                   Reason, ?PRINT_DEPTH_EXIT]);
+to_string({exit_2, From, To, Reason}) ->
+    io_lib:format("Process ~s sends an exit signal to ~p (~P)",
+                  [concuerror_lid:to_string(From),
+                   concuerror_lid:to_string(To),
                    Reason, ?PRINT_DEPTH_EXIT]);
 to_string({fun_exit, Proc, not_found, Reason}) ->
     io_lib:format("Process ~s sends exit signal (~W) to nonexisting process",
@@ -149,6 +162,14 @@ to_string({send, Sender, Receiver, Msg}) ->
     io_lib:format("Process ~s sends message `~W` to process ~s",
                   [concuerror_lid:to_string(Sender), Msg, ?PRINT_DEPTH,
                    concuerror_lid:to_string(Receiver)]);
+to_string({send_after, Sender, Receiver, Msg}) ->
+    io_lib:format("Process ~s sends message `~W` to process ~s (send_after emulated as send)",
+                  [concuerror_lid:to_string(Sender), Msg, ?PRINT_DEPTH,
+                   concuerror_lid:to_string(Receiver)]);
+to_string({start_timer, Sender, Receiver, Msg}) ->
+    io_lib:format("Process ~s sets a timer, with message `~W` to process ~s (expires immediately)",
+                  [concuerror_lid:to_string(Sender), Msg, ?PRINT_DEPTH,
+                   concuerror_lid:to_string(Receiver)]);
 to_string({spawn, not_found, Child}) ->
     io_lib:format("Unknown process spawns process ~s",
                   [concuerror_lid:to_string(Child)]);
@@ -171,10 +192,14 @@ to_string({spawn_monitor, Parent, Child}) ->
                   [concuerror_lid:to_string(Parent),
                    concuerror_lid:to_string(Child)]);
 to_string({spawn_opt, not_found, Child}) ->
-    io_lib:format("Unknown process spawns with opts to process ~s",
+    io_lib:format("Unknown process spawns process ~s with opts",
                   [concuerror_lid:to_string(Child)]);
+to_string({spawn_opt, Parent, {Child, _Ref}}) ->
+    io_lib:format("Process ~s spawns process ~s with opts (and monitors)",
+                  [concuerror_lid:to_string(Parent),
+                   concuerror_lid:to_string(Child)]);
 to_string({spawn_opt, Parent, Child}) ->
-    io_lib:format("Process ~s spawns with opts to process ~s",
+    io_lib:format("Process ~s spawns process ~s with opts",
                   [concuerror_lid:to_string(Parent),
                    concuerror_lid:to_string(Child)]);
 to_string({unlink, Proc, not_found}) ->
@@ -187,6 +212,12 @@ to_string({unlink, Proc1, Proc2}) ->
 to_string({unregister, Proc, RegName}) ->
     io_lib:format("Process ~s unregisters process `~p`",
                   [concuerror_lid:to_string(Proc), RegName]);
+to_string({port_command, Proc, Port}) ->
+    io_lib:format("Process ~s sends data to port ~w",
+                  [concuerror_lid:to_string(Proc), Port]);
+to_string({port_control, Proc, Port}) ->
+    io_lib:format("Process ~s performs control operation on port ~w",
+                  [concuerror_lid:to_string(Proc), Port]);
 to_string({whereis, Proc, RegName, not_found}) ->
     io_lib:format("Process ~s requests the pid of unregistered "
                   "process `~p` (undefined)",

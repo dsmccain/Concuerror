@@ -22,6 +22,7 @@
 -define(INSTR_ERL_FUN,
         [{demonitor, 1},
          {demonitor, 2},
+         {exit, 2},
          {halt, 0},
          {halt, 1},
          {is_process_alive, 1},
@@ -39,12 +40,18 @@
          {spawn_opt, 4},
          {unlink, 1},
          {unregister, 1},
+         {port_command, 2},
+         {port_command, 3},
+         {port_control, 3},
          {apply, 3},
          {whereis, 1}]).
 
 %% Instrumented functions called as erlang:FUNCTION.
 -define(INSTR_ERL_MOD_FUN,
-        [{erlang, send, 2}, {erlang, send, 3}] ++
+        [{erlang, send, 2},
+         {erlang, send, 3},
+         {erlang, send_after, 3},
+         {erlang, start_timer, 3}] ++
             [{erlang, F, A} || {F, A} <- ?INSTR_ERL_FUN]).
 
 %% Instrumented functions from ets module.
@@ -55,6 +62,9 @@
          {ets, insert, 2},
          {ets, delete, 1},
          {ets, delete, 2},
+         {ets, filter, 3},
+         {ets, match, 2},
+         {ets, match, 3},
          {ets, match_object, 2},
          {ets, match_object, 3},
          {ets, match_delete, 2},
@@ -168,5 +178,5 @@
      {binary,   decode_unsigned, 1},
      {binary,   decode_unsigned, 2},
      % Helpers for unicode filenames
-     {file, native_name_encodeing, 0}
+     {file, native_name_encoding, 0}
     ]).

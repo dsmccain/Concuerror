@@ -56,8 +56,7 @@ dependent({Lid, _Instr1, _Msgs1},
 
 %% XXX: This should be fixed in sched:recent_dependency_cv and removed
 dependent({_Lid1, _Instr1, _Msgs1},
-          {_Lid2, Special, _Msgs2}, ?ONLY_INITIALLY, ?ONLY_INITIALLY)
-  when Special =:= 'block'; Special =:= 'init' ->
+          {_Lid2, 'init', _Msgs2}, ?ONLY_INITIALLY, ?ONLY_INITIALLY) ->
     false;
 
 %%==============================================================================
@@ -68,11 +67,15 @@ dependent({_Lid1, _Instr1, _Msgs1},
 
 %% Sending to the same process:
 dependent({ Lid1,  Instr1, PreMsgs1} = Trans1,
-          {_Lid2, _Instr2, PreMsgs2} = Trans2,
+          { Lid2,  Instr2, PreMsgs2} = Trans2,
           ?CHECK_MSG, AllowSwap) ->
-    ProcEvidence = [{P, L} || {P, {_M, L}} <- PreMsgs2],
-    Msgs2 = [{P, M} || {P, {M, _L}} <- PreMsgs2],
-    Msgs1 = add_missing_messages(Lid1, Instr1, PreMsgs1, ProcEvidence),
+    %% ProcEvidence = [{P, L} || {P, {_M, L}} <- PreMsgs2],
+    %% Msgs2 = [{P, M} || {P, {M, _L}} <- PreMsgs2],
+    %% Msgs1 = add_missing_messages(Lid1, Instr1, PreMsgs1, ProcEvidence),
+    ProcEvidence1 = [{P, L, M} || {P, {_M, L, M}} <- PreMsgs1],
+    ProcEvidence2 = [{P, L, M} || {P, {_M, L, M}} <- PreMsgs2],
+    Msgs1 = add_missing_messages(Lid1, Instr1, PreMsgs1, ProcEvidence2),
+    Msgs2 = add_missing_messages(Lid2, Instr2, PreMsgs2, ProcEvidence1),
     case Msgs1 =:= [] orelse Msgs2 =:= [] of
         true -> dependent(Trans1, Trans2, ?DONT_CHECK_MSG, AllowSwap);
         false ->
@@ -105,7 +108,7 @@ dependent({Lid1,          Instr1, PreMsgs1} = Trans1,
        element(1, Info) =:= had_after) ->
     ProcEvidence =
         case Receive =:= 'after' of
-            true  -> [{Lid2, element(2, Info)}];
+            true  -> [{Lid2, element(2, Info), element(3, Info)}];
             false -> []
         end,
     Msgs1 = add_missing_messages(Lid1, Instr1, PreMsgs1, ProcEvidence),
@@ -117,7 +120,8 @@ dependent({Lid1,          Instr1, PreMsgs1} = Trans1,
                         'after' -> element(1, Info);
                         'receive' ->
                             Target = element(3, Info),
-                            fun(X) -> X =:= Target end
+                            OLid = element(2, Info),
+                            fun(X) -> X =:= Target andalso OLid =:= Lid1 end
                     end,
                 lists:any(Fun, MsgsToLid2);
             error -> false
@@ -157,7 +161,7 @@ dependent({_Lid1, {ets, Op1}, _Msgs1},
 
 %% Registering a table with the same name as an existing one.
 dependent({_Lid1, { ets, {   new,           [_Table, Name, Options]}}, _Msgs1},
-          {_Lid2, {exit, {normal, {{_Heirs, Tables}, _Name, _Links}}}, _Msgs2},
+          {_Lid2, {exit, {normal, {{_Heirs, Tables}, _Na, _Li, _Mo}}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
     NamedTables = [N || {_Lid, {ok, N}} <- Tables],
     lists:member(named_table, Options) andalso
@@ -165,7 +169,7 @@ dependent({_Lid1, { ets, {   new,           [_Table, Name, Options]}}, _Msgs1},
 
 %% Table owners exits race with any ets operation on the same table.
 dependent({_Lid1, { ets, {   _Op,                     [Table|_Rest]}}, _Msgs1},
-          {_Lid2, {exit, {normal, {{_Heirs, Tables}, _Name, _Links}}}, _Msgs2},
+          {_Lid2, {exit, {normal, {{_Heirs, Tables}, _Na, _Li, _Mo}}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
     lists:keymember(Table, 1, Tables);
 
@@ -187,8 +191,8 @@ dependent({_Lid1, { ets, _Details1}, _Msgs1},
 
 %% Heirs exit should also be monitored.
 %% XXX: Maybe should be removed
-dependent({Lid1, {exit, {normal, {{Heirs1, _Tbls1}, _Name1, _Links1}}}, _Msgs1},
-          {Lid2, {exit, {normal, {{Heirs2, _Tbls2}, _Name2, _Links2}}}, _Msgs2},
+dependent({Lid1, {exit, {normal, {{Heirs1, _Tbls1}, _N1, _L1, _M1}}}, _Msgs1},
+          {Lid2, {exit, {normal, {{Heirs2, _Tbls2}, _N2, _L2, _M2}}}, _Msgs2},
           _CheckMsg, ?SYMMETRIC) ->
     lists:member(Lid1, Heirs2) orelse lists:member(Lid2, Heirs1);
 
@@ -198,7 +202,7 @@ dependent({Lid1, {exit, {normal, {{Heirs1, _Tbls1}, _Name1, _Links1}}}, _Msgs1},
 
 %% Sending using name to a process that may exit and unregister.
 dependent({_Lid1, {send,                     {TName, _TLid, _Msg}}, _Msgs1},
-          {_Lid2, {exit, {normal, {_Tables, {ok, TName}, _Links}}}, _Msgs2},
+          {_Lid2, {exit, {normal, {_Tables, {ok, TName}, _L, _M}}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
     true;
 dependent({_Lid1, {send, _Details1}, _Msgs1},
@@ -219,7 +223,7 @@ dependent(A, {Lid, {unregister, RegName}, Msgs}, CheckMsg, AllowSwap) ->
 
 %%==============================================================================
 
-%% Send using name before process has registered itself (or after ungeristering).
+%% Send using name before process has registered itself (or after unregistering).
 dependent({_Lid1, {register,      {RegName, _TLid}}, _Msgs1},
           {_Lid2, {    send, {RegName, _Lid, _Msg}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
@@ -249,7 +253,7 @@ dependent({_Lid1, {register, {_RegName, TLid}}, _Msgs1},
 
 %% Register for a name that might be in use.
 dependent({_Lid1, {register,                           {Name, _TLid}}, _Msgs1},
-          {_Lid2, {    exit, {normal, {_Tables, {ok, Name}, _Links}}}, _Msgs2},
+          {_Lid2, {    exit, {normal, {_Tables, {ok, Name}, _L, _M}}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
     true;
 
@@ -291,7 +295,7 @@ dependent({_Lid1, {is_process_alive, _Details1}, _Msgs1},
 
 %% Process registered and exits.
 dependent({_Lid1, {whereis,                          {Name, _TLid1}}, _Msgs1},
-          {_Lid2, {   exit, {normal, {_Tables, {ok, Name}, _Links}}}, _Msgs2},
+          {_Lid2, {   exit, {normal, {_Tables, {ok, Name}, _L, _M}}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
     true;
 
@@ -333,10 +337,16 @@ dependent({_Lid1, {monitor, _Details1}, _Msgs1},
 %%==============================================================================
 
 %% Trap exits flag and linked process exiting.
-dependent({Lid1, {process_flag,        {trap_exit, _Value, Links1}}, _Msgs1},
-          {Lid2, {        exit, {normal, {_Tables, _Name, Links2}}}, _Msgs2},
+dependent({Lid1, {process_flag,         {trap_exit, _Value, Links1}}, _Msgs1},
+          {Lid2, {        exit, {normal, {_Tables, _N, Links2, _M}}}, _Msgs2},
           _CheckMsg, _AllowSwap) ->
     lists:member(Lid2, Links1) orelse lists:member(Lid1, Links2);
+
+%% Trap exits flag and explicit exit signals.
+dependent({ Lid1, {process_flag, {trap_exit, _Value, _Links1}}, _Msgs1},
+          {_Lid2, {      exit_2,              {TLid, _Reason}}, _Msgs2},
+          _CheckMsg, _AllowSwap) ->
+    Lid1 =:= TLid;
 
 %% No other races between setting a process flag and exiting.
 dependent({_Lid1, {process_flag, _Details1}, _Msgs1},
@@ -374,8 +384,8 @@ dependent(TransitionA, TransitionB, _CheckMsg, ?DONT_ALLOW_SWAP) ->
     case independent(TransitionA, TransitionB) of
         true -> false;
         maybe ->
-            concuerror_log:log(3, "Not certainly independent:\n ~p\n ~p\n",
-                      [TransitionA, TransitionB]),
+%            io:format("ALERT! Not certainly independent:\n ~p\n ~p\n",
+%                      [TransitionA, TransitionB]),
             true
     end.
 
@@ -394,38 +404,65 @@ independent({_Lid1, {Op1, _}, _Msgs1}, {_Lid2, {Op2, _}, _Msgs2}) ->
          {     whereis,      send},
          {        link,      send},
          {      unlink,      send},
-         {process_flag,      send}
+         {process_flag,      send},
+         {process_flag,   monitor},
+         {      unlink,   monitor},
+         {    register,   monitor},
+         {     whereis,    unlink},
+         {      unlink,  register},
+         {     whereis,   monitor},
+         {     whereis, demonitor},
+         {     whereis, is_process_alive},
+         {   demonitor, is_process_alive},
+         {     monitor, is_process_alive},
+         {        send, is_process_alive},
+         {        link,   monitor}
         ],
+    %% XXX: This should probably be removed.
+    Solo = [send_after,exit_2],
     case
         %% Assuming that all the races of an instruction with another instance
         %% of itself have already been caught.
         Op1 =:= Op2
         orelse lists:member({Op1, Op2},Independent)
         orelse lists:member({Op2, Op1},Independent)
+        orelse lists:member(Op1, Solo)
+        orelse lists:member(Op2, Solo)
     of
         true -> true;
         false -> maybe
     end.
 
 add_missing_messages(Lid, Instr, PreMsgs, ProcEvidence) ->
-    Msgs = [{P, M} || {P, {M, _L}} <- PreMsgs],
+    Msgs = [{P, M} || {P, {M, _L, _M}} <- PreMsgs],
     case Instr of
         {send, {_RegName, Lid2, Msg}} ->
             add_missing_message(Lid2, Msg, Msgs);
         {exit, _} ->
-            Msg = {'EXIT', Lid, normal},
-            Adder = fun(P, M) -> add_missing_message(P, Msg, M) end,
+            LMsg = {'EXIT', Lid, normal},
+            %% XXX: Dummy could be problematic
+            MMsg = {'DOWN', dummy, process, Lid, normal},
+            LAdder = fun(P, M) -> add_missing_message(P, LMsg, M) end,
+            MAdder = fun(P, M) -> add_missing_message(P, MMsg, M) end,
             Fold =
-                fun({P, Links}, Acc) ->
-                        case lists:member(Lid, Links) of
-                            true -> Adder(P, Acc);
-                            false -> Acc
-                        end
+                fun({P, Links, Monitors}, Acc) ->
+                        Acc1 =
+                            case lists:member(Lid, Links) of
+                                true -> LAdder(P, Acc);
+                                false -> Acc
+                            end,
+                        Acc2 =
+                            case lists:member(Lid, Monitors) of
+                                true -> MAdder(P, Acc1);
+                                false -> Acc1
+                            end,
+                        Acc2
                 end,
             lists:foldl(Fold, Msgs, ProcEvidence);
         _ -> Msgs
     end.
 
+%% XXX: Not accurate for monitor DOWN messages due to dummy
 add_missing_message(Lid, Msg, Msgs) ->
     try true = lists:member(Msg, orddict:fetch(Lid, Msgs)) of
         _ -> Msgs

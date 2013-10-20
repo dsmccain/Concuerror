@@ -75,9 +75,11 @@ check_module_name({Module, Term}, Function, Arity) ->
     {check_module_name(Module, Function, Arity), Term};
 check_module_name(Module, Function, Arity) ->
     Conc_Module =
-        case atom_to_list(Module) of
+        try atom_to_list(Module) of
             ("concuerror_" ++ _Rest) -> true;
             _Other -> false
+        catch   %% In case atom_to_list fail, we don't want to rename the module
+            error:badarg -> true
         end,
     Rename = (not Conc_Module)
         andalso (not ets:member(?NT_INSTR_IGNORED, Module))
@@ -164,7 +166,9 @@ instrument_and_compile(Files, Options) ->
                     instrument_and_compile_one(File, Includes,
                         Defines, Verbosity)
                 end,
-            MFBs = concuerror_util:pmap(InstrOne, Files),
+            Instrumented = concuerror_util:pmap(InstrOne, Files),
+            MFBs = [ F || {F,_S} <- Instrumented],
+            NumOfLines = lists:sum([S || {_F,S} <- Instrumented]),
             delete_temp_files(Options),
             case lists:member('error', MFBs) of
                 true  ->
@@ -174,7 +178,8 @@ instrument_and_compile(Files, Options) ->
                     case Verbosity of
                         0 -> concuerror_log:log(0, " done\n");
                         _ -> concuerror_log:log(0,
-                                "\nInstrumenting files... done\n")
+                                "\nInstrumenting files (~p total lines of code)"
+                                "... done\n", [NumOfLines])
                     end,
                     {ok, MFBs}
             end;
@@ -203,7 +208,10 @@ instrument_and_compile_one(File, Includes, Defines, Verbosity) ->
             %% Instrument given source file.
             concuerror_log:log(1, "\nInstrumenting file ~p... ", [File]),
             case instrument(OldModule, File, Includes, Defines) of
-                {ok, NewFile, NewForms} ->
+                {ok, NewFile, NewForms, NumOfLines} ->
+                    concuerror_log:log(1,
+                        "\nFile ~p successfully instrumented "
+                        "(~p total lines of code).", [File, NumOfLines]),
                     %% Compile instrumented code.
                     %% TODO: More compile options?
                     CompOptions =
@@ -215,21 +223,21 @@ instrument_and_compile_one(File, Includes, Defines, Verbosity) ->
                         end,
                     case compile:forms(NewForms, CompOptions) of
                         {ok, NewModule, Binary} ->
-                            {NewModule, NewFile, Binary};
+                            {{NewModule, NewFile, Binary}, NumOfLines};
                         error ->
                             concuerror_log:log(0, "\nFailed to compile "
                                 "instrumented file ~p.", [NewFile]),
-                            error
+                            {error, 0}
                     end;
                 {error, Error} ->
                     concuerror_log:log(0, "\nFailed to instrument "
                         "file ~p: ~p", [File, Error]),
-                    error
+                    {error, 0}
             end;
         {error, Errors, Warnings} ->
             log_error_list(Errors),
             log_warning_list(Warnings),
-            error
+            {error, 0}
     end.
 
 %% ---------------------------
@@ -271,7 +279,7 @@ instrument(Module, File, Includes, Defines) ->
     NewIncludes = [filename:dirname(File) | Includes],
     %% Rename module
     case rename_module(Module, File) of
-        {ok, NewFile} ->
+        {ok, NewFile, NumOfLines} ->
             case epp:parse_file(NewFile, NewIncludes, Defines) of
                 {ok, OldForms} ->
                     %% Remove `type` and `spec` attributes to avoid
@@ -287,7 +295,7 @@ instrument(Module, File, Includes, Defines) ->
                     Abstract = erl_syntax:revert(Transformed),
                     ?print(Abstract),
                     NewForms = erl_syntax:form_list_elements(Abstract),
-                    {ok, NewFile, NewForms};
+                    {ok, NewFile, NewForms, NumOfLines};
                 {error, _} = Error -> Error
             end;
         {error, _} = Error -> Error
@@ -307,9 +315,12 @@ rename_module(Module, File) ->
             Replacement = binary:list_to_bin(
                 "-module(" ++ NewModuleStr ++ ")."),
             NewBinary = binary:replace(Binary, Pattern, Replacement),
+            %% Count lines of code
+            NewLine = binary:list_to_bin("\n"),
+            Lines = length(binary:matches(NewBinary, NewLine)),
             %% Write new file in temp directory
             case file:write_file(NewFile, NewBinary) of
-                ok    -> {ok, NewFile};
+                ok    -> {ok, NewFile, Lines};
                 Error -> Error
             end;
         Error ->
@@ -596,8 +607,9 @@ transform_receive_case(Clauses) ->
     Fun =
         fun(Clause) ->
             [Pattern] = erl_syntax:clause_patterns(Clause),
+            Guard = erl_syntax:clause_guard(Clause),
             NewBody = erl_syntax:atom(continue),
-            erl_syntax:clause([Pattern], [], [NewBody])
+            erl_syntax:clause([Pattern], Guard, [NewBody])
         end,
     NewClauses = lists:map(Fun, Clauses),
     Pattern = new_underscore_variable(),

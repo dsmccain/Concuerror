@@ -48,7 +48,7 @@
     | {'output',  file:filename()}
     | {'include', [file:name()]}
     | {'define',  concuerror_instr:macros()}
-    | {'dpor', 'full' | 'flanagan'}
+    | {'dpor', 'full' | 'source' | 'classic'}
     | {'noprogress'}
     | {'quiet'}
     | {'preb',    concuerror_sched:bound()}
@@ -62,6 +62,7 @@
     | {'ignore',  [module()]}
     | {'cycle',   concuerror_sched:cycle_detection()}
     | {'graph',  file:filename()}
+    | {'app_controller'}
     | {'help'}.
 
 -type options() :: [option()].
@@ -131,13 +132,16 @@ cliAux(Options) ->
     _ = concuerror_log:start(),
     %% Start the graph manager.
     _ = concuerror_graph:start(),
+    %% Create table to save options
+    ?NT_OPTIONS = ets:new(?NT_OPTIONS, [named_table, public, set]),
+    ets:insert(?NT_OPTIONS, Options),
+    %% Handle options
     case lists:keyfind('graph', 1, Options) of
         {graph, File} ->
             gen_event:add_handler(concuerror_graph, concuerror_graph, File),
             ok;
         false -> ok
     end,
-    %% Parse options
     case lists:keyfind('gui', 1, Options) of
         {'gui'} -> gui(Options);
         false ->
@@ -170,6 +174,8 @@ cliAux(Options) ->
                     end
             end
     end,
+    %% Remove options table
+    ets:delete(?NT_OPTIONS),
     %% Stop event handler
     concuerror_log:stop(),
     concuerror_graph:stop(),
@@ -340,7 +346,16 @@ parse([{Opt, Param} | Args], Options) ->
                     NewOptions = lists:keystore('fail_uninstrumented', 1,
                         Options, {'fail_uninstrumented'}),
                     parse(Args, NewOptions);
-                _Ohter -> wrongArgument('number', Opt)
+                _Other -> wrongArgument('number', Opt)
+            end;
+
+        "-app-controller" ->
+            case Param of
+                [] ->
+                    NewOptions = lists:keystore('app_controller', 1,
+                        Options, {'app_controller'}),
+                    parse(Args, NewOptions);
+                _Other -> wrongArgument('number', Opt)
             end;
 
         "-ignore" ->
@@ -431,13 +446,26 @@ parse([{Opt, Param} | Args], Options) ->
             help(),
             erlang:halt();
 
-        "-dpor" ->
-            NewOptions = lists:keystore(dpor, 1, Options, {dpor, full}),
-            parse(Args, NewOptions);
-
-        "-dpor_flanagan" ->
-            NewOptions = lists:keystore(dpor, 1, Options, {dpor, flanagan}),
-            parse(Args, NewOptions);
+        DPOR when
+              DPOR =:= "-dpor";
+              DPOR =:= "-dpor_optimal";
+              DPOR =:= "-dpor_source";
+              DPOR =:= "-dpor_classic" ->
+            Flavor =
+                case DPOR of
+                    "-dpor"         -> full;
+                    "-dpor_optimal" -> full;
+                    "-dpor_source"  -> source;
+                    "-dpor_classic" -> classic
+                end,
+            case lists:keysearch(dpor, 1, Options) of
+                false ->
+                    NewOptions = [{dpor, Flavor}|Options],
+                    parse(Args, NewOptions);
+                _ ->
+                    Msg = "multiple DPOR algorithms specified",
+                    {'error', 'arguments', Msg}
+            end;
 
         EF when EF=:="root"; EF=:="progname"; EF=:="home"; EF=:="smp";
             EF=:="noshell"; EF=:="noinput"; EF=:="sname"; EF=:="pa";
@@ -510,9 +538,10 @@ help() ->
      "  -v                      Verbose [use twice to be more verbose]\n"
      "  --keep-tmp-files        Retain all intermediate temporary files\n"
      "  --fail-uninstrumented   Fail if there are uninstrumented modules\n"
-     "  --ignore    modules     Don't rename this modules\n"
+     "  --ignore    modules     It is OK for these modules to be uninstrumented\n"
      "  --show-output           Allow program under test to print to stdout\n"
      "  --wait-messages         Wait for uninstrumented messages to arrive\n"
+     "  --app-controller        Start an (instrumented) application controller\n"
      "  -T|--ignore-timeout bound\n"
      "                          Treat big after Timeouts as infinity timeouts\n"
      "  --cycle-detect number1 [number2|inf]\n"
@@ -523,10 +552,13 @@ help() ->
      "                          repeated to be considered a cycle.\n"
      "  --graph     [file]      Writes graph information to the specified\n"
      "                          file (default graph_info.txt)\n"
-     "  --gui                   Run concuerror with graphics\n"
-     "  --dpor                  Runs the experimental optimal DPOR version\n"
-     "  --dpor_flanagan         Runs an experimental reference DPOR version\n"
+     "  --gui                   Run concuerror with a graphical interface\n"
      "  --help                  Show this help message\n"
+     "\n"
+     " DPOR algorithms:\n"
+     "  --dpor|--dpor_optimal   Enables the optimal DPOR algorithm\n"
+     "  --dpor_classic          Enables the classic DPOR algorithm\n"
+     "  --dpor_source           Enables the DPOR algorithm based on source sets\n"
      "\n"
      "Examples:\n"
      "  concuerror -DVSN=\\\"1.0\\\" --target foo bar arg1 arg2 "
@@ -552,9 +584,6 @@ analyze(Options) ->
     Res.
 
 analyzeAux(Options) ->
-    %% Create table to save options
-    ?NT_OPTIONS = ets:new(?NT_OPTIONS, [named_table, public, set]),
-    ets:insert(?NT_OPTIONS, Options),
     %% Get target
     Result =
         case lists:keyfind(target, 1, Options) of
@@ -572,8 +601,6 @@ analyzeAux(Options) ->
                         concuerror_sched:analyze(Target, Files, Options)
                 end
         end,
-    %% Remove options table
-    ets:delete(?NT_OPTIONS),
     %% Return result
     Result.
 
